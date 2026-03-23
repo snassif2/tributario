@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Validador Tributário NF-e / NFS-e</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242736;
+      --green: #00c896;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --blue: #3b82f6;
+      --text: #e8eaf0;
+      --text2: #8b90a4;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; }
+    .mono { font-family: 'IBM Plex Mono', monospace; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white; color: black; }
+      .print-area { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback, useRef, useEffect } = React;
+
+    // ═══════════════════════════════════════════════════════════════
+    // CONFIG — set your API endpoint after SAM deploy
+    // ═══════════════════════════════════════════════════════════════
+    const DEFAULT_API_ENDPOINT = "REPLACE_API_ENDPOINT";
+
+    // ═══════════════════════════════════════════════════════════════
+    // MODULE 1 — XML PARSER
+    // ═══════════════════════════════════════════════════════════════
+    function getText(doc, ...selectors) {
+      for (const sel of selectors) {
+        try {
+          const el = doc.querySelector(sel.replace(/\//g, ' ').trim());
+          if (el && el.textContent) return el.textContent.trim();
+          // fallback: getElementsByTagName
+          const tag = sel.split('/').pop();
+          const els = doc.getElementsByTagName(tag);
+          if (els.length > 0) return els[0].textContent.trim();
+        } catch {}
+      }
+      return null;
+    }
+
+    function getTextByTag(node, tag) {
+      const el = node.getElementsByTagName(tag)[0];
+      return el ? el.textContent.trim() : null;
+    }
+
+    function parseFloat2(v) {
+      const n = parseFloat(v);
+      return isNaN(n) ? 0 : n;
+    }
+
+    function detectTipoDocumento(xmlDoc) {
+      const root = xmlDoc.documentElement;
+      const tagName = root.tagName || '';
+      const ns = root.namespaceURI || '';
+      if (tagName.includes('nfeProc') || tagName.includes('NFe') || ns.includes('nfe.fazenda') || ns.includes('portalfiscal.inf.br/nfe')) return 'NFe';
+      if (tagName.includes('CompNfse') || tagName.includes('NfseProc') || ns.includes('nfse') || ns.includes('abrasf')) return 'NFSe';
+      if (xmlDoc.getElementsByTagName('infNFe').length > 0) return 'NFe';
+      if (xmlDoc.getElementsByTagName('InfNfse').length > 0 || xmlDoc.getElementsByTagName('Nfse').length > 0) return 'NFSe';
+      return 'desconhecido';
+    }
+
+    function parseNFe(xmlDoc, fileName) {
+      const erros = [];
+      const infNFe = xmlDoc.getElementsByTagName('infNFe')[0];
+      const chaveAcesso = infNFe ? (infNFe.getAttribute('Id') || '').replace('NFe', '') :
+        getTextByTag(xmlDoc, 'chNFe') || null;
+
+      const ide = xmlDoc.getElementsByTagName('ide')[0] || xmlDoc;
+      const emit = xmlDoc.getElementsByTagName('emit')[0] || xmlDoc;
+      const dest = xmlDoc.getElementsByTagName('dest')[0] || xmlDoc;
+
+      const crt = getTextByTag(emit, 'CRT') || '3';
+      const regimeMap = { '1': 'Simples Nacional', '2': 'Simples Nacional — Excesso', '3': 'Lucro Presumido / Real' };
+
+      const destCNPJ = getTextByTag(dest, 'CNPJ');
+      const destCPF  = getTextByTag(dest, 'CPF');
+      const indIE    = getTextByTag(dest, 'indIEDest') || '9';
+
+      const dhEmi = getTextByTag(ide, 'dhEmi') || getTextByTag(ide, 'dEmi') || '';
+      const anoEmissao = dhEmi ? parseInt(dhEmi.substring(0, 4)) : new Date().getFullYear();
+
+      // Parse itens
+      const detNodes = xmlDoc.getElementsByTagName('det');
+      const itens = [];
+      for (let i = 0; i < detNodes.length; i++) {
+        const det = detNodes[i];
+        const prod = det.getElementsByTagName('prod')[0] || det;
+        const imposto = det.getElementsByTagName('imposto')[0] || det;
+        const nItem = det.getAttribute('nItem') || String(i + 1);
+
+        const vProd = parseFloat2(getTextByTag(prod, 'vProd'));
+        const vDesc = parseFloat2(getTextByTag(prod, 'vDesc'));
+
+        // Tributos atuais
+        const icms = imposto.getElementsByTagName('ICMS')[0];
+        const pis  = imposto.getElementsByTagName('PIS')[0];
+        const cof  = imposto.getElementsByTagName('COFINS')[0];
+        const ipi  = imposto.getElementsByTagName('IPI')[0];
+
+        const vICMS   = icms ? parseFloat2(getTextByTag(icms, 'vICMS')) : 0;
+        const pICMS   = icms ? parseFloat2(getTextByTag(icms, 'pICMS')) / 100 : 0;
+        const cstICMS = icms ? (getTextByTag(icms, 'CST') || getTextByTag(icms, 'CSOSN') || '') : '';
+        const vPIS    = pis  ? parseFloat2(getTextByTag(pis,  'vPIS'))    : 0;
+        const pPIS    = pis  ? parseFloat2(getTextByTag(pis,  'pPIS')) / 100  : 0;
+        const vCOFINS = cof  ? parseFloat2(getTextByTag(cof,  'vCOFINS')) : 0;
+        const pCOFINS = cof  ? parseFloat2(getTextByTag(cof,  'pCOFINS')) / 100 : 0;
+        const vIPI    = ipi  ? parseFloat2(getTextByTag(ipi,  'vIPI'))    : 0;
+        const pIPI    = ipi  ? parseFloat2(getTextByTag(ipi,  'pIPI')) / 100   : 0;
+
+        // Grupo IBS/CBS (NT 2025.002)
+        const ibscbs = imposto.getElementsByTagName('IBSCBS')[0];
+        let ibs = { valor: null, aliquota: null };
+        let cbs = { valor: null, aliquota: null };
+        let cstIbsCbs = null;
+        let cClassTrib = null;
+        if (ibscbs) {
+          cstIbsCbs  = getTextByTag(ibscbs, 'CST');
+          cClassTrib = getTextByTag(ibscbs, 'cClassTrib');
+          const gibscbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
+          if (gibscbs) {
+            const gibsuf  = gibscbs.getElementsByTagName('gIBSUF')[0];
+            const gibsmun = gibscbs.getElementsByTagName('gIBSMun')[0];
+            const gcbs    = gibscbs.getElementsByTagName('gCBS')[0];
+            const pIBSUF  = gibsuf  ? parseFloat2(getTextByTag(gibsuf,  'pIBSUF'))  / 100 : 0;
+            const vIBSUF  = gibsuf  ? parseFloat2(getTextByTag(gibsuf,  'vIBSUF'))  : 0;
+            const pIBSMun = gibsmun ? parseFloat2(getTextByTag(gibsmun, 'pIBSMun')) / 100 : 0;
+            const vIBSMun = gibsmun ? parseFloat2(getTextByTag(gibsmun, 'vIBSMun')) : 0;
+            ibs = { valor: round2(vIBSUF + vIBSMun), aliquota: pIBSUF + pIBSMun };
+            if (gcbs) cbs = { valor: parseFloat2(getTextByTag(gcbs, 'vCBS')), aliquota: parseFloat2(getTextByTag(gcbs, 'pCBS')) / 100 };
+          }
+        }
+
+        itens.push({
+          numero: parseInt(nItem),
+          codigo: getTextByTag(prod, 'cProd') || '',
+          descricao: getTextByTag(prod, 'xProd') || '',
+          ncm: getTextByTag(prod, 'NCM') || '',
+          nbs: null,
+          cfop: getTextByTag(prod, 'CFOP') || '',
+          quantidade: parseFloat2(getTextByTag(prod, 'qCom')),
+          valor_unitario: parseFloat2(getTextByTag(prod, 'vUnCom')),
+          valor_total: vProd,
+          desconto: vDesc,
+          tributos_declarados: {
+            icms:   { valor: vICMS,   aliquota: pICMS,   cst: cstICMS },
+            pis:    { valor: vPIS,    aliquota: pPIS   },
+            cofins: { valor: vCOFINS, aliquota: pCOFINS },
+            ipi:    { valor: vIPI,    aliquota: pIPI   },
+            iss:    { valor: 0,       aliquota: 0      },
+            ibs,
+            cbs,
+          },
+          cst_ibs_cbs: cstIbsCbs,
+          cclasstrib: cClassTrib,
+        });
+      }
+
+      if (itens.length === 0) erros.push('Nenhum item (det) encontrado no XML');
+
+      const total = xmlDoc.getElementsByTagName('ICMSTot')[0];
+      const ibscbsTot = xmlDoc.getElementsByTagName('IBSCBSTot')[0];
+
+      const cenario = itens.some(it => it.tributos_declarados.ibs.valor !== null) ? 'A' : 'B';
+
+      return {
+        tipo: 'NFe',
+        cenario,
+        chave_acesso: chaveAcesso,
+        emitente: {
+          cnpj: getTextByTag(emit, 'CNPJ') || '',
+          nome: getTextByTag(emit, 'xNome') || '',
+          crt,
+          regime: regimeMap[crt] || 'Regime Desconhecido',
+          uf: getTextByTag(emit.getElementsByTagName('enderEmit')[0] || emit, 'UF') || '',
+        },
+        destinatario: {
+          cnpj_cpf: destCNPJ || destCPF || '',
+          tipo: destCNPJ ? 'PJ' : 'PF',
+          contribuinte: indIE === '1',
+        },
+        data_emissao: dhEmi.substring(0, 10),
+        ano_emissao: anoEmissao,
+        natureza_operacao: getTextByTag(ide, 'natOp') || '',
+        valor_total_nota: total ? parseFloat2(getTextByTag(total, 'vNF')) : itens.reduce((s, i) => s + i.valor_total, 0),
+        itens,
+        erros_parse: erros,
+        arquivo_original: fileName,
+      };
+    }
+
+    function parseNFSe(xmlDoc, fileName) {
+      const erros = [];
+      const prestador = xmlDoc.getElementsByTagName('Prestador')[0] || xmlDoc.getElementsByTagName('prestador')[0] || xmlDoc;
+      const tomador   = xmlDoc.getElementsByTagName('Tomador')[0]   || xmlDoc.getElementsByTagName('tomador')[0]   || xmlDoc;
+      const servico   = xmlDoc.getElementsByTagName('Servico')[0]   || xmlDoc.getElementsByTagName('servico')[0]   || xmlDoc;
+      const valores   = servico ? (servico.getElementsByTagName('Valores')[0] || servico) : xmlDoc;
+
+      const dhEmi = getTextByTag(xmlDoc, 'DataEmissao') || getTextByTag(xmlDoc, 'Competencia') || '';
+      const anoEmissao = dhEmi ? parseInt(dhEmi.substring(0, 4)) : new Date().getFullYear();
+
+      const valorServicos = parseFloat2(getTextByTag(valores, 'ValorServicos'));
+      const aliquotaISS   = parseFloat2(getTextByTag(valores, 'Aliquota'));
+      const valorISS      = parseFloat2(getTextByTag(valores, 'ValorIss'));
+
+      const ibscbs = servico ? (servico.getElementsByTagName('IBSCBS')[0] || null) : null;
+      let ibsDec = { valor: null, aliquota: null };
+      let cbsDec = { valor: null, aliquota: null };
+      let cstIbs = null;
+      let cClass = null;
+      if (ibscbs) {
+        cstIbs = getTextByTag(ibscbs, 'CST');
+        cClass = getTextByTag(ibscbs, 'cClassTrib');
+        const gibscbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
+        if (gibscbs) {
+          const gcbs = gibscbs.getElementsByTagName('gCBS')[0];
+          if (gcbs) cbsDec = { valor: parseFloat2(getTextByTag(gcbs, 'vCBS')), aliquota: parseFloat2(getTextByTag(gcbs, 'pCBS')) / 100 };
+        }
+      }
+
+      const cnpjPrestador = getTextByTag(prestador.getElementsByTagName('IdentificacaoPrestador')[0] || prestador, 'Cnpj')
+        || getTextByTag(prestador, 'Cnpj') || '';
+
+      const item = {
+        numero: 1,
+        codigo: getTextByTag(servico, 'CodigoTributacaoMunicipio') || '',
+        descricao: getTextByTag(servico, 'Discriminacao') || 'Serviço',
+        ncm: '',
+        nbs: getTextByTag(servico, 'CodigoNbs') || null,
+        cfop: '',
+        quantidade: 1,
+        valor_unitario: valorServicos,
+        valor_total: valorServicos,
+        desconto: 0,
+        tributos_declarados: {
+          icms:   { valor: 0, aliquota: 0 },
+          pis:    { valor: 0, aliquota: 0 },
+          cofins: { valor: 0, aliquota: 0 },
+          ipi:    { valor: 0, aliquota: 0 },
+          iss:    { valor: valorISS, aliquota: aliquotaISS / 100 },
+          ibs:    ibsDec,
+          cbs:    cbsDec,
+        },
+        cst_ibs_cbs: cstIbs,
+        cclasstrib: cClass,
+      };
+
+      const cenario = cbsDec.valor !== null ? 'A' : 'B';
+
+      return {
+        tipo: 'NFSe',
+        cenario,
+        chave_acesso: getTextByTag(xmlDoc, 'CodigoVerificacao') || getTextByTag(xmlDoc, 'Numero') || null,
+        emitente: {
+          cnpj: cnpjPrestador,
+          nome: getTextByTag(prestador, 'NomeRazaoSocial') || '',
+          crt: '3',
+          regime: 'Não informado',
+          uf: '',
+        },
+        destinatario: {
+          cnpj_cpf: getTextByTag(tomador.getElementsByTagName('IdentificacaoTomador')[0] || tomador, 'Cnpj') || '',
+          tipo: 'PJ',
+          contribuinte: true,
+        },
+        data_emissao: dhEmi.substring(0, 10),
+        ano_emissao: anoEmissao,
+        natureza_operacao: 'Prestação de Serviço',
+        valor_total_nota: valorServicos,
+        itens: [item],
+        erros_parse: erros,
+        arquivo_original: fileName,
+      };
+    }
+
+    function parseXML(text, fileName) {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, 'text/xml');
+      const parseErr = xmlDoc.querySelector('parsererror');
+      if (parseErr) throw new Error('XML malformado: ' + parseErr.textContent.substring(0, 100));
+      const tipo = detectTipoDocumento(xmlDoc);
+      if (tipo === 'NFe')  return parseNFe(xmlDoc, fileName);
+      if (tipo === 'NFSe') return parseNFSe(xmlDoc, fileName);
+      throw new Error('Documento não reconhecido como NF-e ou NFS-e');
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MODULE 2 — TAX CALCULATION ENGINE
+    // ═══════════════════════════════════════════════════════════════
+    const ALIQUOTAS_TRANSICAO = {
+      2026: { cbs: 0.009,  ibs_uf: 0.001,  ibs_mun: 0.000, total: 0.010 },
+      2027: { cbs: 0.088,  ibs_uf: 0.025,  ibs_mun: 0.025, total: 0.138 },
+      2028: { cbs: 0.088,  ibs_uf: 0.025,  ibs_mun: 0.025, total: 0.138 },
+      2029: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+      2030: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+      2031: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+      2032: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+      2033: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+    };
+
+    const REDUCOES_SETOR = {
+      saude:             { fator: 0.40, ncm_prefixos: ['3001','3002','3003','3004','3005','3006'] },
+      alimentos_basicos: { fator: 0.40, ncm_prefixos: ['1006','0713','0201','0202','0203','0207','0401'] },
+      transporte:        { fator: 0.40, ncm_prefixos: [] },
+      educacao:          { fator: 0.40, ncm_prefixos: [] },
+      servicos_liberais: { fator: 0.70, nbs_prefixos: ['01040'] },
+      cesta_basica_zero: { fator: 0.00, ncm_prefixos: ['1006','0713','0201','0202','0203','0207','0401','1905'] },
+    };
+
+    const IS_NCMS = {
+      cigarros:     { prefixo: '2402', aliquota: 0.20 },
+      alcoolicas:   { prefixo: '2203', aliquota: 0.10 },
+      refrigerante: { prefixo: '2202', aliquota: 0.08 },
+      mineracao:    { prefixo: '2601', aliquota: 0.04 },
+    };
+
+    function round2(v) { return Math.round(v * 100) / 100; }
+
+    function detectarFatorReducao(ncm, nbs) {
+      if (!ncm && !nbs) return 1.0;
+      // Check cesta básica zero first
+      for (const p of REDUCOES_SETOR.cesta_basica_zero.ncm_prefixos) {
+        if (ncm && ncm.startsWith(p)) return 0.0;
+      }
+      // Check 60% reduction sectors
+      for (const [, setor] of Object.entries(REDUCOES_SETOR)) {
+        if (setor.ncm_prefixos) {
+          for (const p of setor.ncm_prefixos) {
+            if (ncm && ncm.startsWith(p)) return setor.fator;
+          }
+        }
+        if (setor.nbs_prefixos && nbs) {
+          for (const p of setor.nbs_prefixos) {
+            if (nbs.startsWith(p)) return setor.fator;
+          }
+        }
+      }
+      return 1.0;
+    }
+
+    function detectarSetor(ncm, nbs) {
+      if (!ncm && !nbs) return 'Geral';
+      for (const [nome, setor] of Object.entries(REDUCOES_SETOR)) {
+        if (setor.ncm_prefixos) {
+          for (const p of setor.ncm_prefixos) {
+            if (ncm && ncm.startsWith(p)) return nome.replace(/_/g, ' ');
+          }
+        }
+        if (setor.nbs_prefixos && nbs) {
+          for (const p of setor.nbs_prefixos) {
+            if (nbs.startsWith(p)) return nome.replace(/_/g, ' ');
+          }
+        }
+      }
+      return 'Geral';
+    }
+
+    function calcularIS(ncm, base) {
+      if (!ncm) return 0;
+      for (const [, is] of Object.entries(IS_NCMS)) {
+        if (ncm.startsWith(is.prefixo)) return round2(base * is.aliquota);
+      }
+      return 0;
+    }
+
+    function calcularItemNovo(item, anoEmissao) {
+      const aliq = ALIQUOTAS_TRANSICAO[anoEmissao] || ALIQUOTAS_TRANSICAO[2026];
+      const base = item.valor_total - (item.desconto || 0);
+      const fator = detectarFatorReducao(item.ncm, item.nbs);
+
+      const cbs_bruta   = base * aliq.cbs    * fator;
+      const ibs_uf      = base * aliq.ibs_uf  * fator;
+      const ibs_mun     = base * aliq.ibs_mun * fator;
+      const ibs_total   = ibs_uf + ibs_mun;
+      const is          = calcularIS(item.ncm, base);
+      const total_novo  = cbs_bruta + ibs_total + is;
+
+      return {
+        base_calculo: base,
+        fator_reducao: fator,
+        cbs:     { aliquota: aliq.cbs    * fator, valor: round2(cbs_bruta) },
+        ibs_uf:  { aliquota: aliq.ibs_uf  * fator, valor: round2(ibs_uf) },
+        ibs_mun: { aliquota: aliq.ibs_mun * fator, valor: round2(ibs_mun) },
+        ibs_total: round2(ibs_total),
+        is: round2(is),
+        total_novo: round2(total_novo),
+        credito_cbs: round2(cbs_bruta),
+        credito_ibs: round2(ibs_total),
+        setor: detectarSetor(item.ncm, item.nbs),
+      };
+    }
+
+    function calcularSplitPayment(total_ibs, total_cbs, valor_nota) {
+      const retido = total_ibs + total_cbs;
+      return {
+        valor_retido: round2(retido),
+        valor_liquido: round2(valor_nota - retido),
+        percentual: valor_nota > 0 ? round2((retido / valor_nota) * 100) : 0,
+        float_dias: 35,
+      };
+    }
+
+    function calcularComparativo(tributos_dec, calc_novo, valor_nota) {
+      const atual = round2(
+        (tributos_dec.icms?.valor   || 0) +
+        (tributos_dec.pis?.valor    || 0) +
+        (tributos_dec.cofins?.valor || 0) +
+        (tributos_dec.ipi?.valor    || 0) +
+        (tributos_dec.iss?.valor    || 0)
+      );
+      const novo = calc_novo.total_novo;
+      const delta = round2(novo - atual);
+      return {
+        atual, novo: round2(novo), delta,
+        delta_pct: atual > 0 ? round2((delta / atual) * 100) : null,
+        tendencia: delta < 0 ? 'reducao' : delta > 0 ? 'aumento' : 'neutro',
+        atual_pct: valor_nota > 0 ? round2((atual / valor_nota) * 100) : 0,
+        novo_pct:  valor_nota > 0 ? round2((novo  / valor_nota) * 100) : 0,
+      };
+    }
+
+    function gerarAlertas(nota, itens_calc) {
+      const alertas = [];
+      if (nota.cenario === 'B') {
+        alertas.push({ tipo: 'simulacao', msg: 'Grupo IBS/CBS ausente — valores projetados para 2027+' });
+      }
+      nota.itens.forEach((item, idx) => {
+        const calc = itens_calc[idx];
+        if (!item.ncm && nota.tipo === 'NFe') alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: NCM não informado — alíquota padrão aplicada` });
+        if (calc && calc.is > 0) alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: NCM sujeito ao Imposto Seletivo (${item.ncm})` });
+        if (calc && calc.fator_reducao === 0) alertas.push({ tipo: 'info', msg: `Item ${item.numero}: Cesta básica — alíquota zero aplicada` });
+        if (calc && calc.fator_reducao > 0 && calc.fator_reducao < 1) alertas.push({ tipo: 'info', msg: `Item ${item.numero}: Redução de ${Math.round((1 - calc.fator_reducao) * 100)}% aplicada (${calc.setor})` });
+        if (nota.cenario === 'A' && item.tributos_declarados.ibs.valor !== null) {
+          const calcIbs = calc.ibs_total;
+          const decIbs  = item.tributos_declarados.ibs.valor;
+          if (decIbs > 0 && Math.abs((calcIbs - decIbs) / decIbs) > 0.0001) {
+            alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: IBS declarado (R$ ${decIbs.toFixed(2)}) diverge do calculado (R$ ${calcIbs.toFixed(2)})` });
+          }
+        }
+      });
+      return alertas.slice(0, 6);
+    }
+
+    function processarNota(nota) {
+      const itens_calc = nota.itens.map(item => calcularItemNovo(item, nota.ano_emissao));
+      const total_cbs = itens_calc.reduce((s, c) => s + c.cbs.valor, 0);
+      const total_ibs = itens_calc.reduce((s, c) => s + c.ibs_total, 0);
+      const total_is  = itens_calc.reduce((s, c) => s + c.is, 0);
+      const total_novo = round2(total_cbs + total_ibs + total_is);
+
+      const tributosDecTotais = {
+        icms:   { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.icms.valor,   0) },
+        pis:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.pis.valor,    0) },
+        cofins: { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.cofins.valor, 0) },
+        ipi:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.ipi.valor,    0) },
+        iss:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.iss.valor,    0) },
+      };
+
+      const comparativo = calcularComparativo(tributosDecTotais, { total_novo }, nota.valor_total_nota);
+      const split = calcularSplitPayment(total_ibs, total_cbs, nota.valor_total_nota);
+      const alertas = gerarAlertas(nota, itens_calc);
+
+      return {
+        nota,
+        itens_calc,
+        totais: { cbs: round2(total_cbs), ibs: round2(total_ibs), is: round2(total_is), novo: total_novo,
+                  credito_cbs: round2(itens_calc.reduce((s, c) => s + c.credito_cbs, 0)),
+                  credito_ibs: round2(itens_calc.reduce((s, c) => s + c.credito_ibs, 0)) },
+        tributos_dec_totais: tributosDecTotais,
+        comparativo,
+        split,
+        alertas,
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MODULE 3 — CLAUDE API
+    // ═══════════════════════════════════════════════════════════════
+    function buildPrompt(resultados) {
+      const resumo = resultados.map(r => ({
+        chave: r.nota.chave_acesso,
+        tipo: r.nota.tipo,
+        emitente: r.nota.emitente.nome,
+        regime: r.nota.emitente.regime,
+        valor_nota: r.nota.valor_total_nota,
+        carga_atual: r.comparativo.atual,
+        carga_nova: r.comparativo.novo,
+        delta_pct: r.comparativo.delta_pct,
+        ncms: [...new Set(r.nota.itens.map(i => i.ncm).filter(Boolean))],
+        nbs_codes: [...new Set(r.nota.itens.map(i => i.nbs).filter(Boolean))],
+        cenario: r.nota.cenario,
+      }));
+
+      return `Você é um especialista tributário brasileiro especializado na Reforma Tributária de 2026 (LC 214/2025).
+
+Analise o seguinte lote de notas fiscais processadas e forneça uma análise tributária em JSON.
+
+DADOS DO LOTE:
+${JSON.stringify(resumo, null, 2)}
+
+INSTRUÇÕES:
+1. Para cada nota, confirme ou corrija a classificação de setor (saúde, educação, serviços, comércio, indústria, etc.)
+2. Identifique NCMs que possam ter tratamento especial (cesta básica, Imposto Seletivo, ZFM, etc.)
+3. Gere um array de alertas por nota (máximo 3 alertas por nota)
+4. Gere um resumo executivo do lote em português (máximo 150 palavras)
+5. Gere recomendações estratégicas (máximo 3 recomendações)
+
+RESPONDA APENAS EM JSON com esta estrutura exata:
+{
+  "analise_por_nota": [
+    {
+      "chave_acesso": "string",
+      "setor_confirmado": "string",
+      "tratamento_especial": "nenhum | cesta_basica | imposto_seletivo | saude | educacao | zmf | outro",
+      "alertas": [
+        { "tipo": "erro|atencao|info", "mensagem": "string" }
+      ],
+      "observacao_ncm": "string ou null"
+    }
+  ],
+  "resumo_executivo": "string",
+  "recomendacoes": [
+    { "prioridade": "alta|media|baixa", "texto": "string" }
+  ]
+}`;
+    }
+
+    async function chamarClaudeAPI(resultados, apiEndpoint) {
+      const prompt = buildPrompt(resultados);
+      const response = await fetch(apiEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 2000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      if (!response.ok) throw new Error(`API error ${response.status}`);
+      const data = await response.json();
+      const text = data.content[0].text;
+      const clean = text.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CSV EXPORT
+    // ═══════════════════════════════════════════════════════════════
+    function exportCSV(resultados) {
+      const header = [
+        'chave_acesso','tipo_doc','emitente_cnpj','emitente_nome','regime','data_emissao',
+        'item_numero','item_descricao','ncm_nbs','valor_item',
+        'icms_atual','pis_atual','cofins_atual','iss_atual','total_atual',
+        'cbs_novo','ibs_novo','is_novo','total_novo',
+        'delta_abs','delta_pct','credito_cbs','credito_ibs','split_retido',
+        'cenario','alertas'
+      ].join(';');
+
+      const rows = [];
+      for (const r of resultados) {
+        r.nota.itens.forEach((item, idx) => {
+          const calc = r.itens_calc[idx];
+          rows.push([
+            r.nota.chave_acesso || '',
+            r.nota.tipo,
+            r.nota.emitente.cnpj,
+            `"${r.nota.emitente.nome}"`,
+            r.nota.emitente.regime,
+            r.nota.data_emissao,
+            item.numero,
+            `"${item.descricao}"`,
+            item.ncm || item.nbs || '',
+            item.valor_total,
+            item.tributos_declarados.icms.valor,
+            item.tributos_declarados.pis.valor,
+            item.tributos_declarados.cofins.valor,
+            item.tributos_declarados.iss.valor,
+            r.comparativo.atual,
+            calc.cbs.valor,
+            calc.ibs_total,
+            calc.is,
+            calc.total_novo,
+            r.comparativo.delta,
+            r.comparativo.delta_pct ?? '',
+            calc.credito_cbs,
+            calc.credito_ibs,
+            r.split.valor_retido,
+            r.nota.cenario,
+            `"${r.alertas.map(a => a.msg).join(' | ')}"`,
+          ].join(';'));
+        });
+      }
+
+      const csv = [header, ...rows].join('\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `validador_tributario_${new Date().toISOString().substring(0,10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // UI COMPONENTS
+    // ═══════════════════════════════════════════════════════════════
+    const S = {
+      bg:       '#0f1117',
+      surface:  '#1a1d27',
+      surface2: '#242736',
+      green:    '#00c896',
+      amber:    '#f59e0b',
+      red:      '#ef4444',
+      blue:     '#3b82f6',
+      text:     '#e8eaf0',
+      text2:    '#8b90a4',
+    };
+
+    function BRL(v) { return (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+    function PCT(v) { return v !== null && v !== undefined ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : '—'; }
+
+    function Badge({ color, children }) {
+      const colors = {
+        green: { bg: '#00c89620', border: S.green,  text: S.green  },
+        amber: { bg: '#f59e0b20', border: S.amber,  text: S.amber  },
+        red:   { bg: '#ef444420', border: S.red,    text: S.red    },
+        blue:  { bg: '#3b82f620', border: S.blue,   text: S.blue   },
+        gray:  { bg: '#ffffff10', border: S.text2,  text: S.text2  },
+      };
+      const c = colors[color] || colors.gray;
+      return (
+        <span style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text,
+          padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+          fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '0.05em' }}>
+          {children}
+        </span>
+      );
+    }
+
+    function AlertBadge({ tipo, msg }) {
+      const map = {
+        erro:      { icon: '●', color: 'red'   },
+        atencao:   { icon: '◆', color: 'amber' },
+        info:      { icon: '✦', color: 'green' },
+        simulacao: { icon: '◈', color: 'blue'  },
+      };
+      const { icon, color } = map[tipo] || map.info;
+      const colors = { green: S.green, amber: S.amber, red: S.red, blue: S.blue };
+      const bgs    = { green: '#00c89615', amber: '#f59e0b15', red: '#ef444415', blue: '#3b82f615' };
+      return (
+        <div style={{ display: 'flex', gap: 8, padding: '6px 10px', borderRadius: 6,
+          background: bgs[color], marginBottom: 4, alignItems: 'flex-start' }}>
+          <span style={{ color: colors[color], fontSize: 10, marginTop: 2, flexShrink: 0 }}>{icon}</span>
+          <span style={{ color: S.text2, fontSize: 12 }}>{msg}</span>
+        </div>
+      );
+    }
+
+    function DropZone({ onFilesLoaded }) {
+      const [dragging, setDragging] = useState(false);
+      const [files, setFiles] = useState([]);
+      const inputRef = useRef();
+
+      const addFiles = useCallback((newFiles) => {
+        const valid = Array.from(newFiles).filter(f => {
+          if (f.size > 5 * 1024 * 1024) return false;
+          return f.name.endsWith('.xml');
+        });
+        setFiles(prev => {
+          const updated = [...prev, ...valid.map(f => ({ file: f, status: 'aguardando' }))];
+          onFilesLoaded(updated.map(e => e.file));
+          return updated;
+        });
+      }, [onFilesLoaded]);
+
+      const removeFile = (idx) => setFiles(prev => {
+        const updated = prev.filter((_, i) => i !== idx);
+        onFilesLoaded(updated.map(e => e.file));
+        return updated;
+      });
+
+      return (
+        <div>
+          <div
+            onClick={() => inputRef.current.click()}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+            style={{
+              border: `2px dashed ${dragging ? S.green : S.surface2}`,
+              borderRadius: 12, padding: '40px 20px', textAlign: 'center', cursor: 'pointer',
+              background: dragging ? '#00c89608' : S.surface,
+              transition: 'all 0.2s',
+            }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>📄</div>
+            <div style={{ color: S.text, fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
+              Arraste XMLs de NF-e ou NFS-e aqui
+            </div>
+            <div style={{ color: S.text2, fontSize: 13 }}>
+              ou clique para selecionar · múltiplos arquivos aceitos · máx. 5 MB por arquivo
+            </div>
+            <input ref={inputRef} type="file" accept=".xml" multiple style={{ display: 'none' }}
+              onChange={e => addFiles(e.target.files)} />
+          </div>
+
+          {files.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ color: S.text2, fontSize: 12, marginBottom: 8 }}>
+                {files.length} arquivo{files.length > 1 ? 's' : ''} carregado{files.length > 1 ? 's' : ''}
+              </div>
+              {files.map((entry, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                  background: S.surface2, borderRadius: 8, marginBottom: 6 }}>
+                  <span style={{ color: S.green, fontSize: 14 }}>📎</span>
+                  <span style={{ flex: 1, color: S.text, fontSize: 13, fontFamily: 'IBM Plex Mono, monospace' }}>
+                    {entry.file.name}
+                  </span>
+                  <span style={{ color: S.text2, fontSize: 11 }}>
+                    {(entry.file.size / 1024).toFixed(1)} KB
+                  </span>
+                  <button onClick={() => removeFile(idx)}
+                    style={{ background: 'none', border: 'none', color: S.red, cursor: 'pointer', fontSize: 16, padding: '0 4px' }}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function TabItens({ itens, itens_calc }) {
+      return (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${S.surface2}` }}>
+                {['Nº','Descrição','NCM','Valor','ICMS','PIS/COFINS','IBS calc.','CBS calc.','IS','Δ%'].map(h => (
+                  <th key={h} style={{ padding: '8px 10px', textAlign: 'right', color: S.text2,
+                    fontFamily: 'IBM Plex Mono, monospace', fontWeight: 500, whiteSpace: 'nowrap',
+                    textAlign: h === 'Descrição' || h === 'NCM' ? 'left' : 'right' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((item, idx) => {
+                const c = itens_calc[idx];
+                const atual = (item.tributos_declarados.icms.valor || 0) + (item.tributos_declarados.pis.valor || 0) +
+                              (item.tributos_declarados.cofins.valor || 0) + (item.tributos_declarados.iss.valor || 0);
+                const delta = c ? ((c.total_novo - atual) / (atual || 1)) * 100 : null;
+                return (
+                  <tr key={idx} style={{ borderBottom: `1px solid ${S.surface2}20` }}>
+                    <td style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.numero}</td>
+                    <td style={{ padding: '8px 10px', color: S.text, maxWidth: 200 }}>{item.descricao}</td>
+                    <td style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.ncm || item.nbs || '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL(item.valor_total)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL(item.tributos_declarados.icms.valor)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL((item.tributos_declarados.pis.valor || 0) + (item.tributos_declarados.cofins.valor || 0))}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.ibs_total) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.cbs.valor) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: c && c.is > 0 ? S.amber : S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.is) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace',
+                      color: delta === null ? S.text2 : delta < 0 ? S.green : delta > 0 ? S.red : S.text2 }}>
+                      {delta !== null ? PCT(delta) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    function TabComparativo({ comparativo, tributos_dec, totais, anoEmissao }) {
+      const maxVal = Math.max(comparativo.atual, comparativo.novo, 1);
+      return (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+            {/* Sistema Atual */}
+            <div style={{ background: S.surface2, borderRadius: 8, padding: 16 }}>
+              <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 12 }}>SISTEMA ATUAL</div>
+              {[
+                ['ICMS',   tributos_dec.icms?.valor],
+                ['PIS',    tributos_dec.pis?.valor],
+                ['COFINS', tributos_dec.cofins?.valor],
+                ['IPI',    tributos_dec.ipi?.valor],
+                ['ISS',    tributos_dec.iss?.valor],
+              ].map(([label, val]) => val > 0 ? (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ color: S.text2, fontSize: 13 }}>{label}</span>
+                  <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>{BRL(val)}</span>
+                </div>
+              ) : null)}
+              <div style={{ borderTop: `1px solid ${S.surface}`, paddingTop: 10, marginTop: 10,
+                display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: S.text, fontWeight: 600 }}>Total</span>
+                <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{BRL(comparativo.atual)}</span>
+              </div>
+              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>{comparativo.atual_pct}% da nota</div>
+              <div style={{ height: 6, background: S.surface, borderRadius: 3, marginTop: 10 }}>
+                <div style={{ height: 6, background: S.amber, borderRadius: 3, width: `${(comparativo.atual / maxVal) * 100}%` }} />
+              </div>
+            </div>
+            {/* Sistema Novo */}
+            <div style={{ background: S.surface2, borderRadius: 8, padding: 16, border: `1px solid ${S.green}30` }}>
+              <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 12 }}>
+                SISTEMA NOVO ({anoEmissao}+)
+              </div>
+              {[
+                ['CBS',  totais.cbs],
+                ['IBS',  totais.ibs],
+                ['IS',   totais.is],
+              ].map(([label, val]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ color: S.text2, fontSize: 13 }}>{label}</span>
+                  <span style={{ color: val > 0 ? S.green : S.text2, fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>{BRL(val)}</span>
+                </div>
+              ))}
+              <div style={{ borderTop: `1px solid ${S.surface}`, paddingTop: 10, marginTop: 10,
+                display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: S.text, fontWeight: 600 }}>Total</span>
+                <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{BRL(comparativo.novo)}</span>
+              </div>
+              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>{comparativo.novo_pct}% da nota</div>
+              <div style={{ height: 6, background: S.surface, borderRadius: 3, marginTop: 10 }}>
+                <div style={{ height: 6, background: S.green, borderRadius: 3, width: `${(comparativo.novo / maxVal) * 100}%` }} />
+              </div>
+            </div>
+          </div>
+          {/* Delta */}
+          <div style={{ background: comparativo.tendencia === 'reducao' ? '#00c89615' : comparativo.tendencia === 'aumento' ? '#ef444415' : S.surface2,
+            border: `1px solid ${comparativo.tendencia === 'reducao' ? S.green : comparativo.tendencia === 'aumento' ? S.red : S.surface2}`,
+            borderRadius: 8, padding: 16, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600,
+              color: comparativo.tendencia === 'reducao' ? S.green : comparativo.tendencia === 'aumento' ? S.red : S.text }}>
+              {comparativo.tendencia === 'reducao' ? '↓' : comparativo.tendencia === 'aumento' ? '↑' : '→'}{' '}
+              {BRL(Math.abs(comparativo.delta))}
+            </div>
+            <div style={{ color: S.text2, fontSize: 13, marginTop: 4 }}>
+              {comparativo.tendencia === 'reducao' ? 'Redução' : comparativo.tendencia === 'aumento' ? 'Aumento' : 'Sem variação'} de carga tributária
+              {comparativo.delta_pct !== null ? ` · ${PCT(comparativo.delta_pct)}` : ''}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function TabCreditos({ itens, itens_calc, destinatario, totais }) {
+      const aviso = destinatario.tipo === 'PF' || !destinatario.contribuinte;
+      return (
+        <div>
+          {aviso && (
+            <AlertBadge tipo="atencao" msg="Destinatário não contribuinte — crédito de IBS/CBS pode não ser aproveitável" />
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${S.surface2}` }}>
+                {['Item','Descrição','Crédito CBS','Crédito IBS','Total'].map(h => (
+                  <th key={h} style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 500,
+                    textAlign: h === 'Descrição' ? 'left' : 'right' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {itens.map((item, idx) => {
+                const c = itens_calc[idx];
+                return (
+                  <tr key={idx} style={{ borderBottom: `1px solid ${S.surface2}20` }}>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.numero}</td>
+                    <td style={{ padding: '8px 10px', color: S.text }}>{item.descricao}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.credito_cbs) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.credito_ibs) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{c ? BRL(c.credito_cbs + c.credito_ibs) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `1px solid ${S.surface2}` }}>
+                <td colSpan={2} style={{ padding: '10px', color: S.text, fontWeight: 600 }}>Total aproveitável</td>
+                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_cbs)}</td>
+                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_ibs)}</td>
+                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_cbs + totais.credito_ibs)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          <div style={{ marginTop: 12, color: S.text2, fontSize: 11, padding: '8px 12px',
+            background: S.surface2, borderRadius: 6 }}>
+            Crédito válido apenas se o destinatário for contribuinte do IBS/CBS (PJ fora do Simples Nacional)
+          </div>
+        </div>
+      );
+    }
+
+    function TabSplit({ split, nota }) {
+      const pctRetido = split.percentual;
+      return (
+        <div>
+          <AlertBadge tipo="simulacao"
+            msg={`A partir de 2027, ${BRL(split.valor_retido)} serão retidos automaticamente no momento do pagamento`} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
+            {[
+              ['Valor total da nota',    BRL(nota.valor_total_nota), S.text ],
+              ['Valor retido (IBS+CBS)', BRL(split.valor_retido),    S.red  ],
+              ['Valor líquido recebido', BRL(split.valor_liquido),   S.green],
+              ['Percentual retido',      `${pctRetido}%`,            S.amber],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ background: S.surface2, borderRadius: 8, padding: 14 }}>
+                <div style={{ color: S.text2, fontSize: 11, marginBottom: 6 }}>{label}</div>
+                <div style={{ color, fontFamily: 'IBM Plex Mono, monospace', fontSize: 18, fontWeight: 600 }}>{val}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 20 }}>
+            <div style={{ color: S.text2, fontSize: 11, marginBottom: 8 }}>Proporção retida × recebida</div>
+            <div style={{ height: 20, background: S.surface2, borderRadius: 10, overflow: 'hidden', display: 'flex' }}>
+              <div style={{ width: `${pctRetido}%`, background: S.red, borderRadius: '10px 0 0 10px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 10, color: 'white', fontFamily: 'IBM Plex Mono, monospace' }}>
+                {pctRetido > 5 ? `${pctRetido}%` : ''}
+              </div>
+              <div style={{ flex: 1, background: S.green, borderRadius: '0 10px 10px 0',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 10, color: '#0f1117', fontFamily: 'IBM Plex Mono, monospace' }}>
+                {100 - pctRetido}%
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function NoteCard({ resultado, analiseIA, defaultOpen }) {
+      const [open, setOpen] = useState(defaultOpen || false);
+      const [aba, setAba] = useState('itens');
+      const { nota, itens_calc, comparativo, split, alertas, totais, tributos_dec_totais } = resultado;
+
+      const chaveResumida = nota.chave_acesso
+        ? `${nota.chave_acesso.substring(0, 4)}...${nota.chave_acesso.substring(40)}`
+        : 'Sem chave';
+
+      const analiseNota = analiseIA?.analise_por_nota?.find(a => a.chave_acesso === nota.chave_acesso);
+      const todosAlertas = [
+        ...alertas,
+        ...(analiseNota?.alertas?.map(a => ({ tipo: a.tipo, msg: a.mensagem })) || []),
+      ];
+
+      return (
+        <div style={{ background: S.surface, borderRadius: 12, marginBottom: 12,
+          border: `1px solid ${S.surface2}`, overflow: 'hidden' }}>
+          {/* Card header */}
+          <div onClick={() => setOpen(!open)} style={{ padding: '16px 20px', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ color: S.text2, fontSize: 20 }}>{nota.tipo === 'NFSe' ? '🧾' : '📃'}</span>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ color: S.text, fontWeight: 600, fontSize: 14 }}>
+                {nota.emitente.nome || 'Emitente'} &nbsp;
+                <span style={{ color: S.text2, fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, fontWeight: 400 }}>
+                  {nota.emitente.cnpj}
+                </span>
+              </div>
+              <div style={{ color: S.text2, fontSize: 12, marginTop: 2, fontFamily: 'IBM Plex Mono, monospace' }}>
+                {chaveResumida} · {nota.data_emissao}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge color={nota.tipo === 'NFe' ? 'blue' : 'green'}>{nota.tipo}</Badge>
+              <Badge color={nota.cenario === 'A' ? 'green' : 'amber'}>
+                {nota.cenario === 'A' ? 'IBS/CBS Declarado' : 'Projeção 2027+'}
+              </Badge>
+              {comparativo.tendencia !== 'neutro' && (
+                <Badge color={comparativo.tendencia === 'reducao' ? 'green' : 'red'}>
+                  {comparativo.tendencia === 'reducao' ? '↓' : '↑'} {PCT(comparativo.delta_pct)}
+                </Badge>
+              )}
+              <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontSize: 14, fontWeight: 600 }}>
+                {BRL(nota.valor_total_nota)}
+              </span>
+            </div>
+            <span style={{ color: S.text2, fontSize: 18 }}>{open ? '▲' : '▼'}</span>
+          </div>
+
+          {open && (
+            <div style={{ borderTop: `1px solid ${S.surface2}`, padding: '16px 20px' }}>
+              {/* Alerts */}
+              {todosAlertas.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  {todosAlertas.map((a, idx) => <AlertBadge key={idx} tipo={a.tipo} msg={a.msg} />)}
+                </div>
+              )}
+
+              {/* Tabs */}
+              <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: `1px solid ${S.surface2}`, paddingBottom: 0 }}>
+                {['itens','comparativo','creditos','split'].map(tab => (
+                  <button key={tab} onClick={() => setAba(tab)}
+                    style={{ padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer',
+                      borderBottom: `2px solid ${aba === tab ? S.green : 'transparent'}`,
+                      color: aba === tab ? S.green : S.text2, fontSize: 13, fontWeight: 500,
+                      textTransform: 'capitalize', transition: 'all 0.15s' }}>
+                    {tab === 'split' ? 'Split Payment' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {aba === 'itens'       && <TabItens itens={nota.itens} itens_calc={itens_calc} />}
+              {aba === 'comparativo' && <TabComparativo comparativo={comparativo} tributos_dec={tributos_dec_totais} totais={totais} anoEmissao={nota.ano_emissao} />}
+              {aba === 'creditos'    && <TabCreditos itens={nota.itens} itens_calc={itens_calc} destinatario={nota.destinatario} totais={totais} />}
+              {aba === 'split'       && <TabSplit split={split} nota={nota} />}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function LoteSummary({ resultados, analiseIA, loadingIA }) {
+      const totalNota = resultados.reduce((s, r) => s + r.nota.valor_total_nota, 0);
+      const totalAtual = resultados.reduce((s, r) => s + r.comparativo.atual, 0);
+      const totalNovo  = resultados.reduce((s, r) => s + r.comparativo.novo, 0);
+      const totalCredito = resultados.reduce((s, r) => s + r.totais.credito_cbs + r.totais.credito_ibs, 0);
+      const totalSplit   = resultados.reduce((s, r) => s + r.split.valor_retido, 0);
+      const deltaTotal = round2(totalNovo - totalAtual);
+
+      return (
+        <div style={{ background: S.surface, borderRadius: 12, padding: 20, marginBottom: 16,
+          border: `1px solid ${S.green}30` }}>
+          <div style={{ color: S.green, fontWeight: 600, fontSize: 13, letterSpacing: '0.1em', marginBottom: 16 }}>
+            RESUMO DO LOTE — {resultados.length} NOTAS
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20 }}>
+            {[
+              ['Valor total das notas', BRL(totalNota), S.text],
+              ['Carga tributária atual', BRL(totalAtual), S.amber],
+              ['Carga tributária nova',  BRL(totalNovo),  S.green],
+              ['Variação total', `${deltaTotal < 0 ? '↓' : '↑'} ${BRL(Math.abs(deltaTotal))}`, deltaTotal < 0 ? S.green : S.red],
+              ['Créditos gerados', BRL(totalCredito), S.green],
+              ['Split payment (retido)', BRL(totalSplit), S.red],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ background: S.surface2, borderRadius: 8, padding: 12 }}>
+                <div style={{ color: S.text2, fontSize: 11, marginBottom: 4 }}>{label}</div>
+                <div style={{ color, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, fontSize: 15 }}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Claude AI Analysis */}
+          {loadingIA ? (
+            <div style={{ textAlign: 'center', padding: 20, color: S.text2 }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⚡</div>
+              <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>Gerando análise tributária...</div>
+            </div>
+          ) : analiseIA ? (
+            <div>
+              <div style={{ borderTop: `1px solid ${S.surface2}`, paddingTop: 16, marginBottom: 12 }}>
+                <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 8 }}>
+                  ANÁLISE IA — RESUMO EXECUTIVO
+                </div>
+                <p style={{ color: S.text, fontSize: 13, lineHeight: 1.6 }}>{analiseIA.resumo_executivo}</p>
+              </div>
+              {analiseIA.recomendacoes?.length > 0 && (
+                <div>
+                  <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 8 }}>
+                    RECOMENDAÇÕES ESTRATÉGICAS
+                  </div>
+                  {analiseIA.recomendacoes.map((r, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: 10, padding: '8px 12px',
+                      background: S.surface2, borderRadius: 6, marginBottom: 6, alignItems: 'flex-start' }}>
+                      <Badge color={r.prioridade === 'alta' ? 'red' : r.prioridade === 'media' ? 'amber' : 'green'}>
+                        {r.prioridade}
+                      </Badge>
+                      <span style={{ color: S.text, fontSize: 13 }}>{r.texto}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    function SettingsPanel({ endpoint, setEndpoint }) {
+      const [show, setShow] = useState(false);
+      const isConfigured = endpoint && endpoint !== 'REPLACE_API_ENDPOINT' && endpoint.startsWith('http');
+      return (
+        <div style={{ marginBottom: 16 }}>
+          <button onClick={() => setShow(!show)}
+            style={{ background: 'none', border: `1px solid ${isConfigured ? S.green : S.amber}`, borderRadius: 6,
+              color: isConfigured ? S.green : S.amber, padding: '6px 14px', cursor: 'pointer', fontSize: 12,
+              fontFamily: 'IBM Plex Mono, monospace' }}>
+            {isConfigured ? '✓ API configurada' : '⚠ Configurar endpoint da API'}
+          </button>
+          {show && (
+            <div style={{ marginTop: 10, background: S.surface, borderRadius: 8, padding: 16,
+              border: `1px solid ${S.surface2}` }}>
+              <div style={{ color: S.text2, fontSize: 12, marginBottom: 8 }}>
+                URL do endpoint Lambda (após SAM deploy) ou proxy Claude:
+              </div>
+              <input value={endpoint}
+                onChange={e => { setEndpoint(e.target.value); localStorage.setItem('tributario_api_endpoint', e.target.value); }}
+                placeholder="https://xxxxxx.execute-api.us-east-1.amazonaws.com/prod/analyze"
+                style={{ width: '100%', background: S.surface2, border: `1px solid ${S.surface2}`,
+                  color: S.text, padding: '8px 12px', borderRadius: 6, fontSize: 12,
+                  fontFamily: 'IBM Plex Mono, monospace' }} />
+              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>
+                Execute <code style={{ color: S.green }}>sam deploy</code> e use a URL do output <code style={{ color: S.green }}>ApiEndpoint</code>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MAIN APP
+    // ═══════════════════════════════════════════════════════════════
+    function App() {
+      const [arquivos, setArquivos]       = useState([]);
+      const [resultados, setResultados]   = useState([]);
+      const [analiseIA, setAnaliseIA]     = useState(null);
+      const [loading, setLoading]         = useState(false);
+      const [loadingIA, setLoadingIA]     = useState(false);
+      const [erroGlobal, setErroGlobal]   = useState(null);
+      const [apiEndpoint, setApiEndpoint] = useState(
+        () => localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT
+      );
+
+      const analisar = async () => {
+        if (!arquivos.length) return;
+        setLoading(true);
+        setErroGlobal(null);
+        setResultados([]);
+        setAnaliseIA(null);
+
+        const notas = await Promise.all(arquivos.map(async file => {
+          try {
+            const text = await file.text();
+            const nota = parseXML(text, file.name);
+            return { ok: true, resultado: processarNota(nota) };
+          } catch (e) {
+            return { ok: false, arquivo: file.name, erro: e.message };
+          }
+        }));
+
+        const ok = notas.filter(n => n.ok).map(n => n.resultado);
+        const erros = notas.filter(n => !n.ok);
+
+        if (erros.length > 0 && ok.length === 0) {
+          setErroGlobal(`Falha ao processar: ${erros.map(e => `${e.arquivo}: ${e.erro}`).join('; ')}`);
+        } else if (erros.length > 0) {
+          // Add parse errors as alerts to the results
+          console.warn('Erros parciais:', erros);
+        }
+
+        setResultados(ok);
+        setLoading(false);
+
+        if (ok.length > 0) {
+          const apiOk = apiEndpoint && apiEndpoint !== 'REPLACE_API_ENDPOINT' && apiEndpoint.startsWith('http');
+          if (apiOk) {
+            setLoadingIA(true);
+            try {
+              const ia = await chamarClaudeAPI(ok, apiEndpoint);
+              setAnaliseIA(ia);
+            } catch (e) {
+              console.warn('Claude API indisponível:', e.message);
+            }
+            setLoadingIA(false);
+          }
+        }
+      };
+
+      return (
+        <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 16px' }}>
+          {/* Header */}
+          <div className="no-print" style={{ marginBottom: 32 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <div>
+                <h1 style={{ fontSize: 22, fontWeight: 700, color: S.text, letterSpacing: '-0.02em' }}>
+                  Validador Tributário NF-e / NFS-e
+                </h1>
+                <p style={{ color: S.text2, fontSize: 13, marginTop: 4 }}>
+                  Reforma Tributária 2026 — LC 214/2025
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+                <Badge color="green">IBS</Badge>
+                <Badge color="green">CBS</Badge>
+                <Badge color="amber">IS</Badge>
+                <Badge color="blue">2026</Badge>
+              </div>
+            </div>
+          </div>
+
+          {/* Settings */}
+          <div className="no-print">
+            <SettingsPanel endpoint={apiEndpoint} setEndpoint={setApiEndpoint} />
+          </div>
+
+          {/* Upload Zone */}
+          <div className="no-print" style={{ marginBottom: 20 }}>
+            <DropZone onFilesLoaded={setArquivos} />
+          </div>
+
+          {/* Analyze Button */}
+          <div className="no-print" style={{ marginBottom: 24 }}>
+            <button onClick={analisar} disabled={arquivos.length === 0 || loading}
+              style={{ width: '100%', padding: '14px', borderRadius: 8, border: 'none', cursor: arquivos.length === 0 || loading ? 'not-allowed' : 'pointer',
+                background: arquivos.length === 0 || loading ? S.surface2 : S.green,
+                color: arquivos.length === 0 || loading ? S.text2 : '#0f1117',
+                fontSize: 15, fontWeight: 700, letterSpacing: '0.02em', transition: 'all 0.2s' }}>
+              {loading ? '⟳ Processando notas...' : `Analisar XMLs${arquivos.length > 0 ? ` (${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''})` : ''}`}
+            </button>
+          </div>
+
+          {/* Error */}
+          {erroGlobal && (
+            <div style={{ background: '#ef444420', border: `1px solid ${S.red}`, borderRadius: 8,
+              padding: 14, marginBottom: 16, color: S.red, fontSize: 13 }}>
+              ⚠ {erroGlobal}
+            </div>
+          )}
+
+          {/* Results */}
+          {resultados.length > 0 && (
+            <div className="print-area">
+              {resultados.length >= 2 && (
+                <LoteSummary resultados={resultados} analiseIA={analiseIA} loadingIA={loadingIA} />
+              )}
+
+              {resultados.map((r, idx) => (
+                <NoteCard key={idx} resultado={r} analiseIA={analiseIA}
+                  defaultOpen={resultados.length === 1} />
+              ))}
+
+              {/* Export buttons */}
+              <div className="no-print" style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                <button onClick={() => exportCSV(resultados)}
+                  style={{ flex: 1, padding: '12px', borderRadius: 8, border: `1px solid ${S.green}`,
+                    background: 'transparent', color: S.green, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
+                  ↓ Exportar CSV
+                </button>
+                <button onClick={() => window.print()}
+                  style={{ flex: 1, padding: '12px', borderRadius: 8, border: `1px solid ${S.text2}`,
+                    background: 'transparent', color: S.text2, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
+                  🖨 Imprimir / PDF
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div style={{ marginTop: 40, textAlign: 'center', color: S.text2, fontSize: 11,
+            fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }}>
+            Base: LC 214/2025 · NT 2025.002 v1.40 · Alíquotas de referência<br />
+            Não substitui assessoria tributária especializada
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
