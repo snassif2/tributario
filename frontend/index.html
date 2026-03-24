@@ -834,9 +834,13 @@ DADOS: ${JSON.stringify(resumo)}`;
           try {
             if (file.name.endsWith('.pdf')) {
               if (!apiOk) throw new Error('Configure o endpoint da API para processar PDFs');
-              const buf    = await file.arrayBuffer();
-              const b64    = btoa(String.fromCharCode(...new Uint8Array(buf)));
-              const nota   = await extractPDF(b64, file.name, apiEndpoint);
+              const b64 = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload  = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = () => reject(new Error('Falha ao ler o arquivo PDF'));
+                reader.readAsDataURL(file);
+              });
+              const nota = await extractPDF(b64, file.name, apiEndpoint);
               nota._source = 'pdf';
               return { ok:true, nota };
             } else {
