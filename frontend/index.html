@@ -492,24 +492,33 @@ DADOS: ${JSON.stringify(resumo)}`;
     // DROP ZONE — accepts XML and PDF
     // ═══════════════════════════════════════════════════════════════════════════
     function DropZone({ onFilesLoaded }) {
-      const [dragging, setDragging] = useState(false);
-      const [entries,  setEntries]  = useState([]);
+      const [dragging,  setDragging]  = useState(false);
+      const [entries,   setEntries]   = useState([]);
+      const [rejected,  setRejected]  = useState([]);
       const inputRef = useRef();
 
       const isPDF = f => f.name.toLowerCase().endsWith('.pdf');
       const isXML = f => f.name.toLowerCase().endsWith('.xml');
+      const MAX_MB = 20;
 
       const addFiles = useCallback((newFiles) => {
-        const valid = Array.from(newFiles).filter(f => {
-          if (f.size > 5*1024*1024) return false;
-          return isXML(f) || isPDF(f);
-        });
+        const all   = Array.from(newFiles);
+        const valid = [];
+        const bad   = [];
+        for (const f of all) {
+          if (!isXML(f) && !isPDF(f)) { bad.push(`${f.name}: formato não suportado (use .xml ou .pdf)`); continue; }
+          if (f.size > MAX_MB * 1024 * 1024) { bad.push(`${f.name}: arquivo muito grande (máx. ${MAX_MB} MB)`); continue; }
+          valid.push(f);
+        }
+        setRejected(bad);
         if (valid.length === 0) return;
         setEntries(prev => {
           const updated = [...prev, ...valid.map(f => ({ file:f, type: isPDF(f) ? 'pdf' : 'xml' }))];
           onFilesLoaded(updated.map(e => e.file));
           return updated;
         });
+        // Reset input so the same file can be re-selected if needed
+        if (inputRef.current) inputRef.current.value = '';
       }, [onFilesLoaded]);
 
       const removeFile = i => setEntries(prev => {
@@ -529,13 +538,19 @@ DADOS: ${JSON.stringify(resumo)}`;
               textAlign:'center',cursor:'pointer',background:dragging?'#00c89608':C.surface,transition:'all 0.2s'}}>
             <div style={{fontSize:32,marginBottom:10}}>📄</div>
             <div style={{color:C.text,fontSize:15,fontWeight:600,marginBottom:6}}>Arraste XMLs de NF-e / NFS-e ou PDFs (DANFE) aqui</div>
-            <div style={{color:C.text2,fontSize:13}}>ou clique para selecionar · múltiplos arquivos · máx. 5 MB</div>
+            <div style={{color:C.text2,fontSize:13}}>ou clique para selecionar · múltiplos arquivos · máx. 20 MB</div>
             <div style={{display:'flex',gap:8,justifyContent:'center',marginTop:12}}>
               <Badge color="blue">XML</Badge>
               <Badge color="amber">PDF</Badge>
             </div>
             <input ref={inputRef} type="file" accept=".xml,.pdf" multiple style={{display:'none'}} onChange={e=>addFiles(e.target.files)} />
           </div>
+
+          {rejected.length > 0 && (
+            <div style={{marginTop:10,background:'#ef444415',border:`1px solid ${C.red}40`,borderRadius:8,padding:'10px 14px'}}>
+              {rejected.map((msg,i) => <div key={i} style={{color:C.red,fontSize:12,marginBottom:i<rejected.length-1?4:0}}>⚠ {msg}</div>)}
+            </div>
+          )}
 
           {entries.length > 0 && (
             <div style={{marginTop:14}}>
