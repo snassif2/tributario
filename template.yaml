@@ -41,6 +41,18 @@ Resources:
             ApiId: !Ref TributarioApi
             Path: /analyze
             Method: OPTIONS
+        PostExtract:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TributarioApi
+            Path: /extract
+            Method: POST
+        OptionsExtract:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TributarioApi
+            Path: /extract
+            Method: OPTIONS
 
   # ── HTTP API Gateway ──────────────────────────────────────────────────────
   TributarioApi:

@@ -11,27 +11,14 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --surface2: #242736;
-      --green: #00c896;
-      --amber: #f59e0b;
-      --red: #ef4444;
-      --blue: #3b82f6;
-      --text: #e8eaf0;
-      --text2: #8b90a4;
-    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; }
-    .mono { font-family: 'IBM Plex Mono', monospace; }
+    body { background: #0f1117; color: #e8eaf0; font-family: 'Inter', sans-serif; }
     ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #242736; border-radius: 3px; }
     @media print {
       .no-print { display: none !important; }
       body { background: white; color: black; }
-      .print-area { padding: 0; }
     }
   </style>
 </head>
@@ -39,713 +26,522 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useCallback, useRef, useEffect } = React;
+    const { useState, useCallback, useRef } = React;
 
-    // ═══════════════════════════════════════════════════════════════
-    // CONFIG — set your API endpoint after SAM deploy
-    // ═══════════════════════════════════════════════════════════════
+    // ─── CONFIG ───────────────────────────────────────────────────────────────
     const DEFAULT_API_ENDPOINT = "REPLACE_API_ENDPOINT";
 
-    // ═══════════════════════════════════════════════════════════════
-    // MODULE 1 — XML PARSER
-    // ═══════════════════════════════════════════════════════════════
-    function getText(doc, ...selectors) {
-      for (const sel of selectors) {
-        try {
-          const el = doc.querySelector(sel.replace(/\//g, ' ').trim());
-          if (el && el.textContent) return el.textContent.trim();
-          // fallback: getElementsByTagName
-          const tag = sel.split('/').pop();
-          const els = doc.getElementsByTagName(tag);
-          if (els.length > 0) return els[0].textContent.trim();
-        } catch {}
-      }
-      return null;
-    }
+    // ─── COLOURS ──────────────────────────────────────────────────────────────
+    const C = {
+      bg: '#0f1117', surface: '#1a1d27', surface2: '#242736', surface3: '#2e3146',
+      green: '#00c896', amber: '#f59e0b', red: '#ef4444', blue: '#3b82f6',
+      text: '#e8eaf0', text2: '#8b90a4',
+    };
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODULE 1 — XML PARSER (browser, pure JS)
+    // ═══════════════════════════════════════════════════════════════════════════
     function getTextByTag(node, tag) {
       const el = node.getElementsByTagName(tag)[0];
       return el ? el.textContent.trim() : null;
     }
+    function pf(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
-    function parseFloat2(v) {
-      const n = parseFloat(v);
-      return isNaN(n) ? 0 : n;
-    }
-
-    function detectTipoDocumento(xmlDoc) {
+    function detectTipo(xmlDoc) {
       const root = xmlDoc.documentElement;
-      const tagName = root.tagName || '';
-      const ns = root.namespaceURI || '';
-      if (tagName.includes('nfeProc') || tagName.includes('NFe') || ns.includes('nfe.fazenda') || ns.includes('portalfiscal.inf.br/nfe')) return 'NFe';
-      if (tagName.includes('CompNfse') || tagName.includes('NfseProc') || ns.includes('nfse') || ns.includes('abrasf')) return 'NFSe';
+      const tag = root.tagName || '';
+      const ns  = root.namespaceURI || '';
+      if (tag.includes('nfeProc') || tag.includes('NFe') || ns.includes('nfe.fazenda') || ns.includes('portalfiscal.inf.br/nfe')) return 'NFe';
+      if (tag.includes('CompNfse') || tag.includes('NfseProc') || ns.includes('nfse') || ns.includes('abrasf')) return 'NFSe';
       if (xmlDoc.getElementsByTagName('infNFe').length > 0) return 'NFe';
       if (xmlDoc.getElementsByTagName('InfNfse').length > 0 || xmlDoc.getElementsByTagName('Nfse').length > 0) return 'NFSe';
       return 'desconhecido';
     }
 
     function parseNFe(xmlDoc, fileName) {
-      const erros = [];
       const infNFe = xmlDoc.getElementsByTagName('infNFe')[0];
-      const chaveAcesso = infNFe ? (infNFe.getAttribute('Id') || '').replace('NFe', '') :
-        getTextByTag(xmlDoc, 'chNFe') || null;
+      const chave  = infNFe ? (infNFe.getAttribute('Id') || '').replace('NFe','') : getTextByTag(xmlDoc,'chNFe');
+      const ide    = xmlDoc.getElementsByTagName('ide')[0]  || xmlDoc;
+      const emit   = xmlDoc.getElementsByTagName('emit')[0] || xmlDoc;
+      const dest   = xmlDoc.getElementsByTagName('dest')[0] || xmlDoc;
+      const crt    = getTextByTag(emit,'CRT') || '3';
+      const regs   = {'1':'Simples Nacional','2':'Simples Nacional — Excesso','3':'Lucro Presumido / Real'};
+      const dhEmi  = getTextByTag(ide,'dhEmi') || getTextByTag(ide,'dEmi') || '';
+      const ano    = dhEmi ? parseInt(dhEmi.substring(0,4)) : new Date().getFullYear();
 
-      const ide = xmlDoc.getElementsByTagName('ide')[0] || xmlDoc;
-      const emit = xmlDoc.getElementsByTagName('emit')[0] || xmlDoc;
-      const dest = xmlDoc.getElementsByTagName('dest')[0] || xmlDoc;
-
-      const crt = getTextByTag(emit, 'CRT') || '3';
-      const regimeMap = { '1': 'Simples Nacional', '2': 'Simples Nacional — Excesso', '3': 'Lucro Presumido / Real' };
-
-      const destCNPJ = getTextByTag(dest, 'CNPJ');
-      const destCPF  = getTextByTag(dest, 'CPF');
-      const indIE    = getTextByTag(dest, 'indIEDest') || '9';
-
-      const dhEmi = getTextByTag(ide, 'dhEmi') || getTextByTag(ide, 'dEmi') || '';
-      const anoEmissao = dhEmi ? parseInt(dhEmi.substring(0, 4)) : new Date().getFullYear();
-
-      // Parse itens
       const detNodes = xmlDoc.getElementsByTagName('det');
       const itens = [];
       for (let i = 0; i < detNodes.length; i++) {
         const det = detNodes[i];
-        const prod = det.getElementsByTagName('prod')[0] || det;
+        const prod    = det.getElementsByTagName('prod')[0]    || det;
         const imposto = det.getElementsByTagName('imposto')[0] || det;
-        const nItem = det.getAttribute('nItem') || String(i + 1);
-
-        const vProd = parseFloat2(getTextByTag(prod, 'vProd'));
-        const vDesc = parseFloat2(getTextByTag(prod, 'vDesc'));
-
-        // Tributos atuais
         const icms = imposto.getElementsByTagName('ICMS')[0];
         const pis  = imposto.getElementsByTagName('PIS')[0];
         const cof  = imposto.getElementsByTagName('COFINS')[0];
         const ipi  = imposto.getElementsByTagName('IPI')[0];
-
-        const vICMS   = icms ? parseFloat2(getTextByTag(icms, 'vICMS')) : 0;
-        const pICMS   = icms ? parseFloat2(getTextByTag(icms, 'pICMS')) / 100 : 0;
-        const cstICMS = icms ? (getTextByTag(icms, 'CST') || getTextByTag(icms, 'CSOSN') || '') : '';
-        const vPIS    = pis  ? parseFloat2(getTextByTag(pis,  'vPIS'))    : 0;
-        const pPIS    = pis  ? parseFloat2(getTextByTag(pis,  'pPIS')) / 100  : 0;
-        const vCOFINS = cof  ? parseFloat2(getTextByTag(cof,  'vCOFINS')) : 0;
-        const pCOFINS = cof  ? parseFloat2(getTextByTag(cof,  'pCOFINS')) / 100 : 0;
-        const vIPI    = ipi  ? parseFloat2(getTextByTag(ipi,  'vIPI'))    : 0;
-        const pIPI    = ipi  ? parseFloat2(getTextByTag(ipi,  'pIPI')) / 100   : 0;
-
-        // Grupo IBS/CBS (NT 2025.002)
         const ibscbs = imposto.getElementsByTagName('IBSCBS')[0];
-        let ibs = { valor: null, aliquota: null };
-        let cbs = { valor: null, aliquota: null };
-        let cstIbsCbs = null;
-        let cClassTrib = null;
+
+        let ibsD = { valor: null, aliquota: null };
+        let cbsD = { valor: null, aliquota: null };
+        let cstIbs = null, cClass = null;
         if (ibscbs) {
-          cstIbsCbs  = getTextByTag(ibscbs, 'CST');
-          cClassTrib = getTextByTag(ibscbs, 'cClassTrib');
-          const gibscbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
-          if (gibscbs) {
-            const gibsuf  = gibscbs.getElementsByTagName('gIBSUF')[0];
-            const gibsmun = gibscbs.getElementsByTagName('gIBSMun')[0];
-            const gcbs    = gibscbs.getElementsByTagName('gCBS')[0];
-            const pIBSUF  = gibsuf  ? parseFloat2(getTextByTag(gibsuf,  'pIBSUF'))  / 100 : 0;
-            const vIBSUF  = gibsuf  ? parseFloat2(getTextByTag(gibsuf,  'vIBSUF'))  : 0;
-            const pIBSMun = gibsmun ? parseFloat2(getTextByTag(gibsmun, 'pIBSMun')) / 100 : 0;
-            const vIBSMun = gibsmun ? parseFloat2(getTextByTag(gibsmun, 'vIBSMun')) : 0;
-            ibs = { valor: round2(vIBSUF + vIBSMun), aliquota: pIBSUF + pIBSMun };
-            if (gcbs) cbs = { valor: parseFloat2(getTextByTag(gcbs, 'vCBS')), aliquota: parseFloat2(getTextByTag(gcbs, 'pCBS')) / 100 };
+          cstIbs = getTextByTag(ibscbs,'CST');
+          cClass = getTextByTag(ibscbs,'cClassTrib');
+          const g = ibscbs.getElementsByTagName('gIBSCBS')[0];
+          if (g) {
+            const guf = g.getElementsByTagName('gIBSUF')[0];
+            const gmun = g.getElementsByTagName('gIBSMun')[0];
+            const gcbs = g.getElementsByTagName('gCBS')[0];
+            ibsD = { valor: pf(getTextByTag(guf,'vIBSUF')) + pf(getTextByTag(gmun,'vIBSMun')), aliquota: pf(getTextByTag(guf,'pIBSUF'))/100 + pf(getTextByTag(gmun,'pIBSMun'))/100 };
+            if (gcbs) cbsD = { valor: pf(getTextByTag(gcbs,'vCBS')), aliquota: pf(getTextByTag(gcbs,'pCBS'))/100 };
           }
         }
 
         itens.push({
-          numero: parseInt(nItem),
-          codigo: getTextByTag(prod, 'cProd') || '',
-          descricao: getTextByTag(prod, 'xProd') || '',
-          ncm: getTextByTag(prod, 'NCM') || '',
-          nbs: null,
-          cfop: getTextByTag(prod, 'CFOP') || '',
-          quantidade: parseFloat2(getTextByTag(prod, 'qCom')),
-          valor_unitario: parseFloat2(getTextByTag(prod, 'vUnCom')),
-          valor_total: vProd,
-          desconto: vDesc,
+          numero: parseInt(det.getAttribute('nItem') || String(i+1)),
+          codigo: getTextByTag(prod,'cProd') || '',
+          descricao: getTextByTag(prod,'xProd') || '',
+          ncm: getTextByTag(prod,'NCM') || '',
+          nbs: null, cfop: getTextByTag(prod,'CFOP') || '',
+          quantidade: pf(getTextByTag(prod,'qCom')),
+          valor_unitario: pf(getTextByTag(prod,'vUnCom')),
+          valor_total: pf(getTextByTag(prod,'vProd')),
+          desconto: pf(getTextByTag(prod,'vDesc')),
           tributos_declarados: {
-            icms:   { valor: vICMS,   aliquota: pICMS,   cst: cstICMS },
-            pis:    { valor: vPIS,    aliquota: pPIS   },
-            cofins: { valor: vCOFINS, aliquota: pCOFINS },
-            ipi:    { valor: vIPI,    aliquota: pIPI   },
-            iss:    { valor: 0,       aliquota: 0      },
-            ibs,
-            cbs,
+            icms:   { valor: icms ? pf(getTextByTag(icms,'vICMS')) : 0,   aliquota: icms ? pf(getTextByTag(icms,'pICMS'))/100 : 0, cst: icms ? (getTextByTag(icms,'CST') || getTextByTag(icms,'CSOSN') || '') : '' },
+            pis:    { valor: pis  ? pf(getTextByTag(pis,'vPIS'))    : 0,  aliquota: pis  ? pf(getTextByTag(pis,'pPIS'))/100  : 0 },
+            cofins: { valor: cof  ? pf(getTextByTag(cof,'vCOFINS')) : 0,  aliquota: cof  ? pf(getTextByTag(cof,'pCOFINS'))/100 : 0 },
+            ipi:    { valor: ipi  ? pf(getTextByTag(ipi,'vIPI'))    : 0,  aliquota: ipi  ? pf(getTextByTag(ipi,'pIPI'))/100  : 0 },
+            iss:    { valor: 0, aliquota: 0 },
+            ibs: ibsD, cbs: cbsD,
           },
-          cst_ibs_cbs: cstIbsCbs,
-          cclasstrib: cClassTrib,
+          cst_ibs_cbs: cstIbs, cclasstrib: cClass,
         });
       }
 
-      if (itens.length === 0) erros.push('Nenhum item (det) encontrado no XML');
-
       const total = xmlDoc.getElementsByTagName('ICMSTot')[0];
-      const ibscbsTot = xmlDoc.getElementsByTagName('IBSCBSTot')[0];
-
-      const cenario = itens.some(it => it.tributos_declarados.ibs.valor !== null) ? 'A' : 'B';
-
       return {
         tipo: 'NFe',
-        cenario,
-        chave_acesso: chaveAcesso,
-        emitente: {
-          cnpj: getTextByTag(emit, 'CNPJ') || '',
-          nome: getTextByTag(emit, 'xNome') || '',
-          crt,
-          regime: regimeMap[crt] || 'Regime Desconhecido',
-          uf: getTextByTag(emit.getElementsByTagName('enderEmit')[0] || emit, 'UF') || '',
-        },
-        destinatario: {
-          cnpj_cpf: destCNPJ || destCPF || '',
-          tipo: destCNPJ ? 'PJ' : 'PF',
-          contribuinte: indIE === '1',
-        },
-        data_emissao: dhEmi.substring(0, 10),
-        ano_emissao: anoEmissao,
-        natureza_operacao: getTextByTag(ide, 'natOp') || '',
-        valor_total_nota: total ? parseFloat2(getTextByTag(total, 'vNF')) : itens.reduce((s, i) => s + i.valor_total, 0),
+        cenario: itens.some(it => it.tributos_declarados.ibs.valor !== null) ? 'A' : 'B',
+        chave_acesso: chave,
+        emitente: { cnpj: getTextByTag(emit,'CNPJ') || '', nome: getTextByTag(emit,'xNome') || '', crt, regime: regs[crt] || '', uf: getTextByTag(emit.getElementsByTagName('enderEmit')[0] || emit,'UF') || '' },
+        destinatario: { cnpj_cpf: getTextByTag(dest,'CNPJ') || getTextByTag(dest,'CPF') || '', tipo: getTextByTag(dest,'CNPJ') ? 'PJ' : 'PF', contribuinte: (getTextByTag(dest,'indIEDest') || '9') === '1' },
+        data_emissao: dhEmi.substring(0,10),
+        ano_emissao: ano,
+        natureza_operacao: getTextByTag(ide,'natOp') || '',
+        valor_total_nota: total ? pf(getTextByTag(total,'vNF')) : itens.reduce((s,i) => s + i.valor_total, 0),
         itens,
-        erros_parse: erros,
+        erros_parse: itens.length === 0 ? ['Nenhum item encontrado'] : [],
         arquivo_original: fileName,
+        _source: 'xml',
       };
     }
 
     function parseNFSe(xmlDoc, fileName) {
-      const erros = [];
-      const prestador = xmlDoc.getElementsByTagName('Prestador')[0] || xmlDoc.getElementsByTagName('prestador')[0] || xmlDoc;
-      const tomador   = xmlDoc.getElementsByTagName('Tomador')[0]   || xmlDoc.getElementsByTagName('tomador')[0]   || xmlDoc;
-      const servico   = xmlDoc.getElementsByTagName('Servico')[0]   || xmlDoc.getElementsByTagName('servico')[0]   || xmlDoc;
-      const valores   = servico ? (servico.getElementsByTagName('Valores')[0] || servico) : xmlDoc;
-
-      const dhEmi = getTextByTag(xmlDoc, 'DataEmissao') || getTextByTag(xmlDoc, 'Competencia') || '';
-      const anoEmissao = dhEmi ? parseInt(dhEmi.substring(0, 4)) : new Date().getFullYear();
-
-      const valorServicos = parseFloat2(getTextByTag(valores, 'ValorServicos'));
-      const aliquotaISS   = parseFloat2(getTextByTag(valores, 'Aliquota'));
-      const valorISS      = parseFloat2(getTextByTag(valores, 'ValorIss'));
-
-      const ibscbs = servico ? (servico.getElementsByTagName('IBSCBS')[0] || null) : null;
-      let ibsDec = { valor: null, aliquota: null };
-      let cbsDec = { valor: null, aliquota: null };
-      let cstIbs = null;
-      let cClass = null;
-      if (ibscbs) {
-        cstIbs = getTextByTag(ibscbs, 'CST');
-        cClass = getTextByTag(ibscbs, 'cClassTrib');
-        const gibscbs = ibscbs.getElementsByTagName('gIBSCBS')[0];
-        if (gibscbs) {
-          const gcbs = gibscbs.getElementsByTagName('gCBS')[0];
-          if (gcbs) cbsDec = { valor: parseFloat2(getTextByTag(gcbs, 'vCBS')), aliquota: parseFloat2(getTextByTag(gcbs, 'pCBS')) / 100 };
-        }
-      }
-
-      const cnpjPrestador = getTextByTag(prestador.getElementsByTagName('IdentificacaoPrestador')[0] || prestador, 'Cnpj')
-        || getTextByTag(prestador, 'Cnpj') || '';
-
-      const item = {
-        numero: 1,
-        codigo: getTextByTag(servico, 'CodigoTributacaoMunicipio') || '',
-        descricao: getTextByTag(servico, 'Discriminacao') || 'Serviço',
-        ncm: '',
-        nbs: getTextByTag(servico, 'CodigoNbs') || null,
-        cfop: '',
-        quantidade: 1,
-        valor_unitario: valorServicos,
-        valor_total: valorServicos,
-        desconto: 0,
-        tributos_declarados: {
-          icms:   { valor: 0, aliquota: 0 },
-          pis:    { valor: 0, aliquota: 0 },
-          cofins: { valor: 0, aliquota: 0 },
-          ipi:    { valor: 0, aliquota: 0 },
-          iss:    { valor: valorISS, aliquota: aliquotaISS / 100 },
-          ibs:    ibsDec,
-          cbs:    cbsDec,
-        },
-        cst_ibs_cbs: cstIbs,
-        cclasstrib: cClass,
-      };
-
-      const cenario = cbsDec.valor !== null ? 'A' : 'B';
-
+      const prestador = xmlDoc.getElementsByTagName('Prestador')[0] || xmlDoc;
+      const servico   = xmlDoc.getElementsByTagName('Servico')[0]   || xmlDoc;
+      const valores   = servico.getElementsByTagName('Valores')[0]  || xmlDoc;
+      const dhEmi     = getTextByTag(xmlDoc,'DataEmissao') || getTextByTag(xmlDoc,'Competencia') || '';
+      const ano       = dhEmi ? parseInt(dhEmi.substring(0,4)) : new Date().getFullYear();
+      const valServ   = pf(getTextByTag(valores,'ValorServicos'));
       return {
-        tipo: 'NFSe',
-        cenario,
-        chave_acesso: getTextByTag(xmlDoc, 'CodigoVerificacao') || getTextByTag(xmlDoc, 'Numero') || null,
-        emitente: {
-          cnpj: cnpjPrestador,
-          nome: getTextByTag(prestador, 'NomeRazaoSocial') || '',
-          crt: '3',
-          regime: 'Não informado',
-          uf: '',
-        },
-        destinatario: {
-          cnpj_cpf: getTextByTag(tomador.getElementsByTagName('IdentificacaoTomador')[0] || tomador, 'Cnpj') || '',
-          tipo: 'PJ',
-          contribuinte: true,
-        },
-        data_emissao: dhEmi.substring(0, 10),
-        ano_emissao: anoEmissao,
+        tipo: 'NFSe', cenario: 'B',
+        chave_acesso: getTextByTag(xmlDoc,'CodigoVerificacao') || getTextByTag(xmlDoc,'Numero') || null,
+        emitente: { cnpj: getTextByTag(prestador.getElementsByTagName('IdentificacaoPrestador')[0] || prestador,'Cnpj') || '', nome: getTextByTag(prestador,'NomeRazaoSocial') || '', crt: '3', regime: 'Não informado', uf: '' },
+        destinatario: { cnpj_cpf: '', tipo: 'PJ', contribuinte: true },
+        data_emissao: dhEmi.substring(0,10), ano_emissao: ano,
         natureza_operacao: 'Prestação de Serviço',
-        valor_total_nota: valorServicos,
-        itens: [item],
-        erros_parse: erros,
-        arquivo_original: fileName,
+        valor_total_nota: valServ,
+        itens: [{
+          numero: 1, codigo: getTextByTag(servico,'CodigoTributacaoMunicipio') || '',
+          descricao: getTextByTag(servico,'Discriminacao') || 'Serviço',
+          ncm: '', nbs: getTextByTag(servico,'CodigoNbs') || null, cfop: '',
+          quantidade: 1, valor_unitario: valServ, valor_total: valServ, desconto: 0,
+          tributos_declarados: {
+            icms: {valor:0,aliquota:0,cst:''}, pis: {valor:0,aliquota:0}, cofins: {valor:0,aliquota:0},
+            ipi: {valor:0,aliquota:0}, iss: {valor:pf(getTextByTag(valores,'ValorIss')), aliquota:pf(getTextByTag(valores,'Aliquota'))/100},
+            ibs: {valor:null,aliquota:null}, cbs: {valor:null,aliquota:null},
+          },
+          cst_ibs_cbs: null, cclasstrib: null,
+        }],
+        erros_parse: [], arquivo_original: fileName, _source: 'xml',
       };
     }
 
     function parseXML(text, fileName) {
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(text, 'text/xml');
-      const parseErr = xmlDoc.querySelector('parsererror');
-      if (parseErr) throw new Error('XML malformado: ' + parseErr.textContent.substring(0, 100));
-      const tipo = detectTipoDocumento(xmlDoc);
+      if (xmlDoc.querySelector('parsererror')) throw new Error('XML malformado');
+      const tipo = detectTipo(xmlDoc);
       if (tipo === 'NFe')  return parseNFe(xmlDoc, fileName);
       if (tipo === 'NFSe') return parseNFSe(xmlDoc, fileName);
       throw new Error('Documento não reconhecido como NF-e ou NFS-e');
     }
 
-    // ═══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // MODULE 2 — TAX CALCULATION ENGINE
-    // ═══════════════════════════════════════════════════════════════
-    const ALIQUOTAS_TRANSICAO = {
-      2026: { cbs: 0.009,  ibs_uf: 0.001,  ibs_mun: 0.000, total: 0.010 },
-      2027: { cbs: 0.088,  ibs_uf: 0.025,  ibs_mun: 0.025, total: 0.138 },
-      2028: { cbs: 0.088,  ibs_uf: 0.025,  ibs_mun: 0.025, total: 0.138 },
-      2029: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
-      2030: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
-      2031: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
-      2032: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
-      2033: { cbs: 0.088,  ibs_uf: 0.089,  ibs_mun: 0.088, total: 0.265 },
+    // ═══════════════════════════════════════════════════════════════════════════
+    const ALIQ = {
+      2026: { cbs:0.009,  ibs_uf:0.001,  ibs_mun:0.000 },
+      2027: { cbs:0.088,  ibs_uf:0.025,  ibs_mun:0.025 },
+      2028: { cbs:0.088,  ibs_uf:0.025,  ibs_mun:0.025 },
+      2029: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
+      2030: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
+      2031: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
+      2032: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
+      2033: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
     };
-
-    const REDUCOES_SETOR = {
-      saude:             { fator: 0.40, ncm_prefixos: ['3001','3002','3003','3004','3005','3006'] },
-      alimentos_basicos: { fator: 0.40, ncm_prefixos: ['1006','0713','0201','0202','0203','0207','0401'] },
-      transporte:        { fator: 0.40, ncm_prefixos: [] },
-      educacao:          { fator: 0.40, ncm_prefixos: [] },
-      servicos_liberais: { fator: 0.70, nbs_prefixos: ['01040'] },
-      cesta_basica_zero: { fator: 0.00, ncm_prefixos: ['1006','0713','0201','0202','0203','0207','0401','1905'] },
+    const REDUC = {
+      cesta_basica:   { fator:0.00, ncm: ['1006','0713','0201','0202','0203','0207','0401','1905'] },
+      saude:          { fator:0.40, ncm: ['3001','3002','3003','3004','3005','3006'] },
+      alimentos:      { fator:0.40, ncm: ['1006','0713','0201','0202','0203','0207','0401'] },
+      servicos_lib:   { fator:0.70, nbs: ['01040'] },
     };
+    const IS_MAP = { cigarros:{p:'2402',a:0.20}, alcoolicas:{p:'2203',a:0.10}, refrig:{p:'2202',a:0.08}, miner:{p:'2601',a:0.04} };
 
-    const IS_NCMS = {
-      cigarros:     { prefixo: '2402', aliquota: 0.20 },
-      alcoolicas:   { prefixo: '2203', aliquota: 0.10 },
-      refrigerante: { prefixo: '2202', aliquota: 0.08 },
-      mineracao:    { prefixo: '2601', aliquota: 0.04 },
-    };
+    function r2(v) { return Math.round(v * 100) / 100; }
 
-    function round2(v) { return Math.round(v * 100) / 100; }
-
-    function detectarFatorReducao(ncm, nbs) {
-      if (!ncm && !nbs) return 1.0;
-      // Check cesta básica zero first
-      for (const p of REDUCOES_SETOR.cesta_basica_zero.ncm_prefixos) {
-        if (ncm && ncm.startsWith(p)) return 0.0;
+    function getFator(ncm, nbs) {
+      if (!ncm && !nbs) return 1;
+      for (const p of REDUC.cesta_basica.ncm) if (ncm && ncm.startsWith(p)) return 0;
+      for (const [, s] of Object.entries(REDUC)) {
+        if (s.ncm) for (const p of s.ncm) if (ncm && ncm.startsWith(p)) return s.fator;
+        if (s.nbs && nbs) for (const p of s.nbs) if (nbs.startsWith(p)) return s.fator;
       }
-      // Check 60% reduction sectors
-      for (const [, setor] of Object.entries(REDUCOES_SETOR)) {
-        if (setor.ncm_prefixos) {
-          for (const p of setor.ncm_prefixos) {
-            if (ncm && ncm.startsWith(p)) return setor.fator;
-          }
-        }
-        if (setor.nbs_prefixos && nbs) {
-          for (const p of setor.nbs_prefixos) {
-            if (nbs.startsWith(p)) return setor.fator;
-          }
-        }
-      }
-      return 1.0;
+      return 1;
     }
-
-    function detectarSetor(ncm, nbs) {
+    function getSetor(ncm, nbs) {
       if (!ncm && !nbs) return 'Geral';
-      for (const [nome, setor] of Object.entries(REDUCOES_SETOR)) {
-        if (setor.ncm_prefixos) {
-          for (const p of setor.ncm_prefixos) {
-            if (ncm && ncm.startsWith(p)) return nome.replace(/_/g, ' ');
-          }
-        }
-        if (setor.nbs_prefixos && nbs) {
-          for (const p of setor.nbs_prefixos) {
-            if (nbs.startsWith(p)) return nome.replace(/_/g, ' ');
-          }
-        }
+      for (const [nome, s] of Object.entries(REDUC)) {
+        if (s.ncm) for (const p of s.ncm) if (ncm && ncm.startsWith(p)) return nome.replace(/_/g,' ');
+        if (s.nbs && nbs) for (const p of s.nbs) if (nbs.startsWith(p)) return nome.replace(/_/g,' ');
       }
       return 'Geral';
     }
-
-    function calcularIS(ncm, base) {
+    function getIS(ncm, base) {
       if (!ncm) return 0;
-      for (const [, is] of Object.entries(IS_NCMS)) {
-        if (ncm.startsWith(is.prefixo)) return round2(base * is.aliquota);
-      }
+      for (const [, is] of Object.entries(IS_MAP)) if (ncm.startsWith(is.p)) return r2(base * is.a);
       return 0;
     }
-
-    function calcularItemNovo(item, anoEmissao) {
-      const aliq = ALIQUOTAS_TRANSICAO[anoEmissao] || ALIQUOTAS_TRANSICAO[2026];
-      const base = item.valor_total - (item.desconto || 0);
-      const fator = detectarFatorReducao(item.ncm, item.nbs);
-
-      const cbs_bruta   = base * aliq.cbs    * fator;
-      const ibs_uf      = base * aliq.ibs_uf  * fator;
-      const ibs_mun     = base * aliq.ibs_mun * fator;
-      const ibs_total   = ibs_uf + ibs_mun;
-      const is          = calcularIS(item.ncm, base);
-      const total_novo  = cbs_bruta + ibs_total + is;
-
-      return {
-        base_calculo: base,
-        fator_reducao: fator,
-        cbs:     { aliquota: aliq.cbs    * fator, valor: round2(cbs_bruta) },
-        ibs_uf:  { aliquota: aliq.ibs_uf  * fator, valor: round2(ibs_uf) },
-        ibs_mun: { aliquota: aliq.ibs_mun * fator, valor: round2(ibs_mun) },
-        ibs_total: round2(ibs_total),
-        is: round2(is),
-        total_novo: round2(total_novo),
-        credito_cbs: round2(cbs_bruta),
-        credito_ibs: round2(ibs_total),
-        setor: detectarSetor(item.ncm, item.nbs),
-      };
+    function calcItem(item, ano) {
+      const aliq  = ALIQ[ano] || ALIQ[2026];
+      const base  = item.valor_total - (item.desconto || 0);
+      const fator = getFator(item.ncm, item.nbs);
+      const cbs   = base * aliq.cbs     * fator;
+      const ibsUF = base * aliq.ibs_uf  * fator;
+      const ibsMun= base * aliq.ibs_mun * fator;
+      const ibs   = ibsUF + ibsMun;
+      const is    = getIS(item.ncm, base);
+      return { base, fator, cbs:r2(cbs), ibs_uf:r2(ibsUF), ibs_mun:r2(ibsMun), ibs_total:r2(ibs),
+               is:r2(is), total_novo:r2(cbs+ibs+is), credito_cbs:r2(cbs), credito_ibs:r2(ibs), setor:getSetor(item.ncm,item.nbs) };
     }
-
-    function calcularSplitPayment(total_ibs, total_cbs, valor_nota) {
-      const retido = total_ibs + total_cbs;
-      return {
-        valor_retido: round2(retido),
-        valor_liquido: round2(valor_nota - retido),
-        percentual: valor_nota > 0 ? round2((retido / valor_nota) * 100) : 0,
-        float_dias: 35,
-      };
+    function calcSplit(ibs, cbs, vNota) {
+      const ret = ibs + cbs;
+      return { valor_retido:r2(ret), valor_liquido:r2(vNota-ret), percentual: vNota>0 ? r2((ret/vNota)*100) : 0 };
     }
-
-    function calcularComparativo(tributos_dec, calc_novo, valor_nota) {
-      const atual = round2(
-        (tributos_dec.icms?.valor   || 0) +
-        (tributos_dec.pis?.valor    || 0) +
-        (tributos_dec.cofins?.valor || 0) +
-        (tributos_dec.ipi?.valor    || 0) +
-        (tributos_dec.iss?.valor    || 0)
-      );
-      const novo = calc_novo.total_novo;
-      const delta = round2(novo - atual);
-      return {
-        atual, novo: round2(novo), delta,
-        delta_pct: atual > 0 ? round2((delta / atual) * 100) : null,
-        tendencia: delta < 0 ? 'reducao' : delta > 0 ? 'aumento' : 'neutro',
-        atual_pct: valor_nota > 0 ? round2((atual / valor_nota) * 100) : 0,
-        novo_pct:  valor_nota > 0 ? round2((novo  / valor_nota) * 100) : 0,
-      };
+    function calcComp(dec, novo, vNota) {
+      const atual = r2((dec.icms?.valor||0)+(dec.pis?.valor||0)+(dec.cofins?.valor||0)+(dec.ipi?.valor||0)+(dec.iss?.valor||0));
+      const delta = r2(novo - atual);
+      return { atual, novo:r2(novo), delta, delta_pct: atual>0 ? r2((delta/atual)*100) : null,
+               tendencia: delta<0?'reducao':delta>0?'aumento':'neutro',
+               atual_pct: vNota>0 ? r2((atual/vNota)*100) : 0,
+               novo_pct:  vNota>0 ? r2((novo/vNota)*100) : 0 };
     }
-
-    function gerarAlertas(nota, itens_calc) {
-      const alertas = [];
-      if (nota.cenario === 'B') {
-        alertas.push({ tipo: 'simulacao', msg: 'Grupo IBS/CBS ausente — valores projetados para 2027+' });
-      }
-      nota.itens.forEach((item, idx) => {
-        const calc = itens_calc[idx];
-        if (!item.ncm && nota.tipo === 'NFe') alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: NCM não informado — alíquota padrão aplicada` });
-        if (calc && calc.is > 0) alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: NCM sujeito ao Imposto Seletivo (${item.ncm})` });
-        if (calc && calc.fator_reducao === 0) alertas.push({ tipo: 'info', msg: `Item ${item.numero}: Cesta básica — alíquota zero aplicada` });
-        if (calc && calc.fator_reducao > 0 && calc.fator_reducao < 1) alertas.push({ tipo: 'info', msg: `Item ${item.numero}: Redução de ${Math.round((1 - calc.fator_reducao) * 100)}% aplicada (${calc.setor})` });
-        if (nota.cenario === 'A' && item.tributos_declarados.ibs.valor !== null) {
-          const calcIbs = calc.ibs_total;
-          const decIbs  = item.tributos_declarados.ibs.valor;
-          if (decIbs > 0 && Math.abs((calcIbs - decIbs) / decIbs) > 0.0001) {
-            alertas.push({ tipo: 'atencao', msg: `Item ${item.numero}: IBS declarado (R$ ${decIbs.toFixed(2)}) diverge do calculado (R$ ${calcIbs.toFixed(2)})` });
-          }
-        }
+    function gerarAlertas(nota, calc) {
+      const al = [];
+      if (nota.cenario==='B') al.push({tipo:'simulacao',msg:'Grupo IBS/CBS ausente — valores projetados'});
+      nota.itens.forEach((item, i) => {
+        const c = calc[i];
+        if (!item.ncm && nota.tipo==='NFe') al.push({tipo:'atencao',msg:`Item ${item.numero}: NCM não informado`});
+        if (c?.is > 0) al.push({tipo:'atencao',msg:`Item ${item.numero}: Imposto Seletivo (NCM ${item.ncm})`});
+        if (c?.fator===0) al.push({tipo:'info',msg:`Item ${item.numero}: Cesta básica — alíquota zero`});
+        else if (c?.fator < 1) al.push({tipo:'info',msg:`Item ${item.numero}: Redução ${Math.round((1-c.fator)*100)}% (${c.setor})`});
       });
-      return alertas.slice(0, 6);
+      return al.slice(0,6);
     }
-
     function processarNota(nota) {
-      const itens_calc = nota.itens.map(item => calcularItemNovo(item, nota.ano_emissao));
-      const total_cbs = itens_calc.reduce((s, c) => s + c.cbs.valor, 0);
-      const total_ibs = itens_calc.reduce((s, c) => s + c.ibs_total, 0);
-      const total_is  = itens_calc.reduce((s, c) => s + c.is, 0);
-      const total_novo = round2(total_cbs + total_ibs + total_is);
-
-      const tributosDecTotais = {
-        icms:   { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.icms.valor,   0) },
-        pis:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.pis.valor,    0) },
-        cofins: { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.cofins.valor, 0) },
-        ipi:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.ipi.valor,    0) },
-        iss:    { valor: nota.itens.reduce((s, i) => s + i.tributos_declarados.iss.valor,    0) },
-      };
-
-      const comparativo = calcularComparativo(tributosDecTotais, { total_novo }, nota.valor_total_nota);
-      const split = calcularSplitPayment(total_ibs, total_cbs, nota.valor_total_nota);
-      const alertas = gerarAlertas(nota, itens_calc);
-
-      return {
-        nota,
-        itens_calc,
-        totais: { cbs: round2(total_cbs), ibs: round2(total_ibs), is: round2(total_is), novo: total_novo,
-                  credito_cbs: round2(itens_calc.reduce((s, c) => s + c.credito_cbs, 0)),
-                  credito_ibs: round2(itens_calc.reduce((s, c) => s + c.credito_ibs, 0)) },
-        tributos_dec_totais: tributosDecTotais,
-        comparativo,
-        split,
-        alertas,
-      };
+      const calc = nota.itens.map(it => calcItem(it, nota.ano_emissao));
+      const totCBS = r2(calc.reduce((s,c)=>s+c.cbs,0));
+      const totIBS = r2(calc.reduce((s,c)=>s+c.ibs_total,0));
+      const totIS  = r2(calc.reduce((s,c)=>s+c.is,0));
+      const totNovo= r2(totCBS+totIBS+totIS);
+      const decTot = { icms:{valor:nota.itens.reduce((s,i)=>s+i.tributos_declarados.icms.valor,0)}, pis:{valor:nota.itens.reduce((s,i)=>s+i.tributos_declarados.pis.valor,0)}, cofins:{valor:nota.itens.reduce((s,i)=>s+i.tributos_declarados.cofins.valor,0)}, ipi:{valor:nota.itens.reduce((s,i)=>s+i.tributos_declarados.ipi.valor,0)}, iss:{valor:nota.itens.reduce((s,i)=>s+i.tributos_declarados.iss.valor,0)} };
+      return { nota, itens_calc:calc, totais:{ cbs:totCBS, ibs:totIBS, is:totIS, novo:totNovo, credito_cbs:r2(calc.reduce((s,c)=>s+c.credito_cbs,0)), credito_ibs:r2(calc.reduce((s,c)=>s+c.credito_ibs,0)) }, tributos_dec_totais:decTot, comparativo:calcComp(decTot,totNovo,nota.valor_total_nota), split:calcSplit(totIBS,totCBS,nota.valor_total_nota), alertas:gerarAlertas(nota,calc) };
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // MODULE 3 — CLAUDE API
-    // ═══════════════════════════════════════════════════════════════
-    function buildPrompt(resultados) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODULE 3 — API CALLS
+    // ═══════════════════════════════════════════════════════════════════════════
+    async function extractPDF(base64, filename, endpoint) {
+      const extractUrl = endpoint.replace('/analyze','/extract');
+      const res = await fetch(extractUrl, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ pdf_base64: base64, filename }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data.nota;
+    }
+
+    async function chamarClaudeAPI(resultados, endpoint) {
       const resumo = resultados.map(r => ({
-        chave: r.nota.chave_acesso,
-        tipo: r.nota.tipo,
-        emitente: r.nota.emitente.nome,
-        regime: r.nota.emitente.regime,
-        valor_nota: r.nota.valor_total_nota,
-        carga_atual: r.comparativo.atual,
-        carga_nova: r.comparativo.novo,
+        chave: r.nota.chave_acesso, tipo: r.nota.tipo, emitente: r.nota.emitente.nome,
+        regime: r.nota.emitente.regime, valor_nota: r.nota.valor_total_nota,
+        carga_atual: r.comparativo.atual, carga_nova: r.comparativo.novo,
         delta_pct: r.comparativo.delta_pct,
-        ncms: [...new Set(r.nota.itens.map(i => i.ncm).filter(Boolean))],
-        nbs_codes: [...new Set(r.nota.itens.map(i => i.nbs).filter(Boolean))],
+        ncms: [...new Set(r.nota.itens.map(i=>i.ncm).filter(Boolean))],
         cenario: r.nota.cenario,
       }));
+      const prompt = `Você é um especialista tributário brasileiro especializado na Reforma Tributária de 2026 (LC 214/2025).
+Analise o lote de notas fiscais e retorne APENAS JSON com esta estrutura exata:
+{"analise_por_nota":[{"chave_acesso":"string","setor_confirmado":"string","tratamento_especial":"nenhum|cesta_basica|imposto_seletivo|saude|educacao|zmf|outro","alertas":[{"tipo":"erro|atencao|info","mensagem":"string"}],"observacao_ncm":"string ou null"}],"resumo_executivo":"string (máx 150 palavras)","recomendacoes":[{"prioridade":"alta|media|baixa","texto":"string"}]}
 
-      return `Você é um especialista tributário brasileiro especializado na Reforma Tributária de 2026 (LC 214/2025).
-
-Analise o seguinte lote de notas fiscais processadas e forneça uma análise tributária em JSON.
-
-DADOS DO LOTE:
-${JSON.stringify(resumo, null, 2)}
-
-INSTRUÇÕES:
-1. Para cada nota, confirme ou corrija a classificação de setor (saúde, educação, serviços, comércio, indústria, etc.)
-2. Identifique NCMs que possam ter tratamento especial (cesta básica, Imposto Seletivo, ZFM, etc.)
-3. Gere um array de alertas por nota (máximo 3 alertas por nota)
-4. Gere um resumo executivo do lote em português (máximo 150 palavras)
-5. Gere recomendações estratégicas (máximo 3 recomendações)
-
-RESPONDA APENAS EM JSON com esta estrutura exata:
-{
-  "analise_por_nota": [
-    {
-      "chave_acesso": "string",
-      "setor_confirmado": "string",
-      "tratamento_especial": "nenhum | cesta_basica | imposto_seletivo | saude | educacao | zmf | outro",
-      "alertas": [
-        { "tipo": "erro|atencao|info", "mensagem": "string" }
-      ],
-      "observacao_ncm": "string ou null"
-    }
-  ],
-  "resumo_executivo": "string",
-  "recomendacoes": [
-    { "prioridade": "alta|media|baixa", "texto": "string" }
-  ]
-}`;
-    }
-
-    async function chamarClaudeAPI(resultados, apiEndpoint) {
-      const prompt = buildPrompt(resultados);
-      const response = await fetch(apiEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: prompt }],
-        }),
+DADOS: ${JSON.stringify(resumo)}`;
+      const res = await fetch(endpoint, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:2000, messages:[{role:'user',content:prompt}] }),
       });
-      if (!response.ok) throw new Error(`API error ${response.status}`);
-      const data = await response.json();
-      const text = data.content[0].text;
-      const clean = text.replace(/```json|```/g, '').trim();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const clean = data.content[0].text.replace(/```json|```/g,'').trim();
       return JSON.parse(clean);
     }
 
-    // ═══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // CSV EXPORT
-    // ═══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     function exportCSV(resultados) {
-      const header = [
-        'chave_acesso','tipo_doc','emitente_cnpj','emitente_nome','regime','data_emissao',
-        'item_numero','item_descricao','ncm_nbs','valor_item',
-        'icms_atual','pis_atual','cofins_atual','iss_atual','total_atual',
-        'cbs_novo','ibs_novo','is_novo','total_novo',
-        'delta_abs','delta_pct','credito_cbs','credito_ibs','split_retido',
-        'cenario','alertas'
-      ].join(';');
-
+      const hdr = 'chave_acesso;tipo_doc;emitente_cnpj;emitente_nome;regime;data_emissao;item_nr;item_desc;ncm_nbs;valor_item;icms;pis;cofins;iss;total_atual;cbs_novo;ibs_novo;is_novo;total_novo;delta_abs;delta_pct;credito_cbs;credito_ibs;split_retido;cenario;fonte;alertas';
       const rows = [];
       for (const r of resultados) {
         r.nota.itens.forEach((item, idx) => {
-          const calc = r.itens_calc[idx];
+          const c = r.itens_calc[idx];
           rows.push([
-            r.nota.chave_acesso || '',
-            r.nota.tipo,
-            r.nota.emitente.cnpj,
-            `"${r.nota.emitente.nome}"`,
-            r.nota.emitente.regime,
-            r.nota.data_emissao,
-            item.numero,
-            `"${item.descricao}"`,
-            item.ncm || item.nbs || '',
-            item.valor_total,
-            item.tributos_declarados.icms.valor,
-            item.tributos_declarados.pis.valor,
-            item.tributos_declarados.cofins.valor,
-            item.tributos_declarados.iss.valor,
-            r.comparativo.atual,
-            calc.cbs.valor,
-            calc.ibs_total,
-            calc.is,
-            calc.total_novo,
-            r.comparativo.delta,
-            r.comparativo.delta_pct ?? '',
-            calc.credito_cbs,
-            calc.credito_ibs,
-            r.split.valor_retido,
-            r.nota.cenario,
-            `"${r.alertas.map(a => a.msg).join(' | ')}"`,
+            r.nota.chave_acesso||'', r.nota.tipo, r.nota.emitente.cnpj, `"${r.nota.emitente.nome}"`,
+            r.nota.emitente.regime, r.nota.data_emissao, item.numero, `"${item.descricao}"`,
+            item.ncm||item.nbs||'', item.valor_total,
+            item.tributos_declarados.icms.valor, item.tributos_declarados.pis.valor,
+            item.tributos_declarados.cofins.valor, item.tributos_declarados.iss.valor,
+            r.comparativo.atual, c.cbs, c.ibs_total, c.is, c.total_novo,
+            r.comparativo.delta, r.comparativo.delta_pct??'',
+            c.credito_cbs, c.credito_ibs, r.split.valor_retido,
+            r.nota.cenario, r.nota._source||'xml',
+            `"${r.alertas.map(a=>a.msg).join(' | ')}"`,
           ].join(';'));
         });
       }
-
-      const csv = [header, ...rows].join('\n');
-      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `validador_tributario_${new Date().toISOString().substring(0,10)}.csv`;
-      a.click();
+      const csv = [hdr,...rows].join('\n');
+      const url = URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'}));
+      const a = document.createElement('a'); a.href=url; a.download=`tributario_${new Date().toISOString().substring(0,10)}.csv`; a.click();
       URL.revokeObjectURL(url);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // UI COMPONENTS
-    // ═══════════════════════════════════════════════════════════════
-    const S = {
-      bg:       '#0f1117',
-      surface:  '#1a1d27',
-      surface2: '#242736',
-      green:    '#00c896',
-      amber:    '#f59e0b',
-      red:      '#ef4444',
-      blue:     '#3b82f6',
-      text:     '#e8eaf0',
-      text2:    '#8b90a4',
-    };
-
-    function BRL(v) { return (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
-    function PCT(v) { return v !== null && v !== undefined ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : '—'; }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UI PRIMITIVES
+    // ═══════════════════════════════════════════════════════════════════════════
+    const BRL = v => (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+    const PCT = v => v!=null ? `${v>0?'+':''}${v.toFixed(2)}%` : '—';
 
     function Badge({ color, children }) {
-      const colors = {
-        green: { bg: '#00c89620', border: S.green,  text: S.green  },
-        amber: { bg: '#f59e0b20', border: S.amber,  text: S.amber  },
-        red:   { bg: '#ef444420', border: S.red,    text: S.red    },
-        blue:  { bg: '#3b82f620', border: S.blue,   text: S.blue   },
-        gray:  { bg: '#ffffff10', border: S.text2,  text: S.text2  },
-      };
-      const c = colors[color] || colors.gray;
-      return (
-        <span style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text,
-          padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-          fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '0.05em' }}>
-          {children}
-        </span>
-      );
+      const m = { green:{bg:'#00c89620',b:C.green,t:C.green}, amber:{bg:'#f59e0b20',b:C.amber,t:C.amber}, red:{bg:'#ef444420',b:C.red,t:C.red}, blue:{bg:'#3b82f620',b:C.blue,t:C.blue}, gray:{bg:'#ffffff10',b:C.text2,t:C.text2} };
+      const s = m[color]||m.gray;
+      return <span style={{background:s.bg,border:`1px solid ${s.b}`,color:s.t,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,fontFamily:'IBM Plex Mono,monospace',letterSpacing:'0.05em'}}>{children}</span>;
     }
 
-    function AlertBadge({ tipo, msg }) {
-      const map = {
-        erro:      { icon: '●', color: 'red'   },
-        atencao:   { icon: '◆', color: 'amber' },
-        info:      { icon: '✦', color: 'green' },
-        simulacao: { icon: '◈', color: 'blue'  },
-      };
-      const { icon, color } = map[tipo] || map.info;
-      const colors = { green: S.green, amber: S.amber, red: S.red, blue: S.blue };
-      const bgs    = { green: '#00c89615', amber: '#f59e0b15', red: '#ef444415', blue: '#3b82f615' };
+    function AlertRow({ tipo, msg }) {
+      const m = { erro:{icon:'●',c:C.red,bg:'#ef444415'}, atencao:{icon:'◆',c:C.amber,bg:'#f59e0b15'}, info:{icon:'✦',c:C.green,bg:'#00c89615'}, simulacao:{icon:'◈',c:C.blue,bg:'#3b82f615'} };
+      const s = m[tipo]||m.info;
+      return <div style={{display:'flex',gap:8,padding:'6px 10px',borderRadius:6,background:s.bg,marginBottom:4,alignItems:'flex-start'}}><span style={{color:s.c,fontSize:10,marginTop:2,flexShrink:0}}>{s.icon}</span><span style={{color:C.text2,fontSize:12}}>{msg}</span></div>;
+    }
+
+    function FieldRow({ label, value, mono, highlight }) {
+      if (!value && value !== 0) return null;
       return (
-        <div style={{ display: 'flex', gap: 8, padding: '6px 10px', borderRadius: 6,
-          background: bgs[color], marginBottom: 4, alignItems: 'flex-start' }}>
-          <span style={{ color: colors[color], fontSize: 10, marginTop: 2, flexShrink: 0 }}>{icon}</span>
-          <span style={{ color: S.text2, fontSize: 12 }}>{msg}</span>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'5px 0',borderBottom:`1px solid ${C.surface3}20`}}>
+          <span style={{color:C.text2,fontSize:12,minWidth:160}}>{label}</span>
+          <span style={{color:highlight||C.text,fontSize:12,fontFamily:mono?'IBM Plex Mono,monospace':'inherit',textAlign:'right'}}>{value}</span>
         </div>
       );
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EXTRACTED FIELDS PANEL — shows all parsed/AI-extracted data per nota
+    // ═══════════════════════════════════════════════════════════════════════════
+    function ExtractedItemRow({ item, idx }) {
+      const [open, setOpen] = useState(false);
+      const td = item.tributos_declarados;
+      return (
+        <div style={{background:C.surface3,borderRadius:8,marginBottom:6}}>
+          <div onClick={()=>setOpen(!open)} style={{display:'flex',gap:12,padding:'10px 14px',cursor:'pointer',alignItems:'center'}}>
+            <span style={{color:C.text2,fontFamily:'IBM Plex Mono,monospace',fontSize:11,minWidth:24}}>#{item.numero}</span>
+            <span style={{flex:1,color:C.text,fontSize:13}}>{item.descricao||'—'}</span>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              {item.ncm && <Badge color="gray">{item.ncm}</Badge>}
+              {item.nbs && <Badge color="blue">NBS {item.nbs}</Badge>}
+              {item.cfop && <Badge color="gray">CFOP {item.cfop}</Badge>}
+              <span style={{color:C.green,fontFamily:'IBM Plex Mono,monospace',fontSize:13,fontWeight:600}}>{BRL(item.valor_total)}</span>
+              <span style={{color:C.text2,fontSize:14}}>{open?'▲':'▼'}</span>
+            </div>
+          </div>
+          {open && (
+            <div style={{padding:'0 14px 14px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+              <div>
+                <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:8}}>PRODUTO / SERVIÇO</div>
+                <FieldRow label="Código" value={item.codigo} mono />
+                <FieldRow label="Quantidade" value={item.quantidade} mono />
+                <FieldRow label="Valor unitário" value={BRL(item.valor_unitario)} mono />
+                <FieldRow label="Valor total" value={BRL(item.valor_total)} mono highlight={C.green} />
+                {item.desconto > 0 && <FieldRow label="Desconto" value={BRL(item.desconto)} mono highlight={C.amber} />}
+                <FieldRow label="NCM" value={item.ncm} mono />
+                <FieldRow label="NBS" value={item.nbs} mono />
+                <FieldRow label="CFOP" value={item.cfop} mono />
+              </div>
+              <div>
+                <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:8}}>TRIBUTOS DECLARADOS</div>
+                {td.icms?.valor > 0   && <><FieldRow label="ICMS alíquota" value={`${(td.icms.aliquota*100).toFixed(2)}%`} mono /><FieldRow label="ICMS valor" value={BRL(td.icms.valor)} mono highlight={C.amber} /></>}
+                {td.pis?.valor > 0    && <><FieldRow label="PIS alíquota"  value={`${(td.pis.aliquota*100).toFixed(4)}%`} mono /><FieldRow label="PIS valor"  value={BRL(td.pis.valor)}  mono highlight={C.amber} /></>}
+                {td.cofins?.valor > 0 && <><FieldRow label="COFINS alíquota" value={`${(td.cofins.aliquota*100).toFixed(2)}%`} mono /><FieldRow label="COFINS valor" value={BRL(td.cofins.valor)} mono highlight={C.amber} /></>}
+                {td.ipi?.valor > 0    && <><FieldRow label="IPI alíquota"  value={`${(td.ipi.aliquota*100).toFixed(2)}%`} mono /><FieldRow label="IPI valor"  value={BRL(td.ipi.valor)}  mono highlight={C.amber} /></>}
+                {td.iss?.valor > 0    && <><FieldRow label="ISS alíquota"  value={`${(td.iss.aliquota*100).toFixed(2)}%`} mono /><FieldRow label="ISS valor"  value={BRL(td.iss.valor)}  mono highlight={C.amber} /></>}
+                {td.ibs?.valor != null && <><FieldRow label="IBS declarado" value={BRL(td.ibs.valor)} mono highlight={C.green} /></>}
+                {td.cbs?.valor != null && <><FieldRow label="CBS declarado" value={BRL(td.cbs.valor)} mono highlight={C.green} /></>}
+                {item.cst_ibs_cbs && <FieldRow label="CST IBS/CBS" value={item.cst_ibs_cbs} mono />}
+                {item.cclasstrib  && <FieldRow label="cClassTrib"  value={item.cclasstrib}  mono />}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ExtractedFieldsCard({ nota, index }) {
+      const [open, setOpen] = useState(true);
+      const isPDF = nota._source === 'pdf';
+      return (
+        <div style={{background:C.surface,borderRadius:12,marginBottom:12,border:`1px solid ${isPDF ? C.blue+'50' : C.surface2}`,overflow:'hidden'}}>
+          {/* Header */}
+          <div onClick={()=>setOpen(!open)} style={{padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+            <span style={{fontSize:20}}>{nota.tipo==='NFSe'?'🧾':'📃'}</span>
+            <div style={{flex:1,minWidth:180}}>
+              <div style={{color:C.text,fontWeight:600,fontSize:14}}>
+                {nota.emitente.nome||nota.arquivo_original}
+                {nota.emitente.cnpj && <span style={{color:C.text2,fontFamily:'IBM Plex Mono,monospace',fontSize:11,fontWeight:400,marginLeft:8}}>{nota.emitente.cnpj}</span>}
+              </div>
+              <div style={{color:C.text2,fontSize:12,marginTop:2,fontFamily:'IBM Plex Mono,monospace'}}>
+                {nota.data_emissao} · {nota.natureza_operacao}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <Badge color={nota.tipo==='NFe'?'blue':'green'}>{nota.tipo}</Badge>
+              {isPDF && <Badge color="blue">PDF · IA</Badge>}
+              <Badge color={nota.cenario==='A'?'green':'amber'}>{nota.cenario==='A'?'IBS/CBS Declarado':'Projeção 2027+'}</Badge>
+              <span style={{color:C.green,fontFamily:'IBM Plex Mono,monospace',fontSize:15,fontWeight:700}}>{BRL(nota.valor_total_nota)}</span>
+            </div>
+            <span style={{color:C.text2,fontSize:18}}>{open?'▲':'▼'}</span>
+          </div>
+
+          {open && (
+            <div style={{borderTop:`1px solid ${C.surface2}`,padding:'16px 20px'}}>
+              {isPDF && (
+                <div style={{background:'#3b82f615',border:`1px solid ${C.blue}40`,borderRadius:8,padding:'10px 14px',marginBottom:16,display:'flex',gap:10,alignItems:'center'}}>
+                  <span style={{color:C.blue,fontSize:16}}>✦</span>
+                  <span style={{color:C.text2,fontSize:12}}>Campos extraídos automaticamente do PDF pela IA — verifique os valores antes de prosseguir com a análise tributária.</span>
+                </div>
+              )}
+
+              {nota.erros_parse?.length > 0 && nota.erros_parse.map((e,i) => <AlertRow key={i} tipo="erro" msg={e} />)}
+
+              {/* Header fields */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:20}}>
+                {/* Emitente */}
+                <div style={{background:C.surface2,borderRadius:8,padding:14}}>
+                  <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>EMITENTE</div>
+                  <FieldRow label="Razão Social"  value={nota.emitente.nome}  />
+                  <FieldRow label="CNPJ"          value={nota.emitente.cnpj}  mono />
+                  <FieldRow label="Regime"        value={nota.emitente.regime} />
+                  <FieldRow label="CRT"           value={nota.emitente.crt}   mono />
+                  <FieldRow label="UF"            value={nota.emitente.uf}    mono />
+                </div>
+                {/* Destinatário + Cabeçalho */}
+                <div style={{background:C.surface2,borderRadius:8,padding:14}}>
+                  <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>DESTINATÁRIO & CABEÇALHO</div>
+                  <FieldRow label="CNPJ / CPF"    value={nota.destinatario.cnpj_cpf} mono />
+                  <FieldRow label="Tipo"          value={nota.destinatario.tipo} />
+                  <FieldRow label="Contribuinte"  value={nota.destinatario.contribuinte?'Sim':'Não'} />
+                  <FieldRow label="Data emissão"  value={nota.data_emissao} mono />
+                  <FieldRow label="Chave acesso"  value={nota.chave_acesso ? `${nota.chave_acesso.substring(0,12)}...` : '—'} mono />
+                  <FieldRow label="Valor total"   value={BRL(nota.valor_total_nota)} mono highlight={C.green} />
+                </div>
+              </div>
+
+              {/* Items */}
+              <div>
+                <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>
+                  {nota.itens.length} ITEM{nota.itens.length!==1?'S':''} / PRODUTO{nota.itens.length!==1?'S':''}
+                </div>
+                {nota.itens.map((item, i) => <ExtractedItemRow key={i} item={item} idx={i} />)}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DROP ZONE — accepts XML and PDF
+    // ═══════════════════════════════════════════════════════════════════════════
     function DropZone({ onFilesLoaded }) {
       const [dragging, setDragging] = useState(false);
-      const [files, setFiles] = useState([]);
+      const [entries,  setEntries]  = useState([]);
       const inputRef = useRef();
 
       const addFiles = useCallback((newFiles) => {
         const valid = Array.from(newFiles).filter(f => {
-          if (f.size > 5 * 1024 * 1024) return false;
-          return f.name.endsWith('.xml');
+          if (f.size > 5*1024*1024) return false;
+          return f.name.endsWith('.xml') || f.name.endsWith('.pdf');
         });
-        setFiles(prev => {
-          const updated = [...prev, ...valid.map(f => ({ file: f, status: 'aguardando' }))];
+        setEntries(prev => {
+          const updated = [...prev, ...valid.map(f => ({ file:f, type: f.name.endsWith('.pdf') ? 'pdf' : 'xml' }))];
           onFilesLoaded(updated.map(e => e.file));
           return updated;
         });
       }, [onFilesLoaded]);
 
-      const removeFile = (idx) => setFiles(prev => {
-        const updated = prev.filter((_, i) => i !== idx);
+      const removeFile = i => setEntries(prev => {
+        const updated = prev.filter((_,idx) => idx!==i);
         onFilesLoaded(updated.map(e => e.file));
         return updated;
       });
 
       return (
         <div>
-          <div
-            onClick={() => inputRef.current.click()}
-            onDragOver={e => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
-            style={{
-              border: `2px dashed ${dragging ? S.green : S.surface2}`,
-              borderRadius: 12, padding: '40px 20px', textAlign: 'center', cursor: 'pointer',
-              background: dragging ? '#00c89608' : S.surface,
-              transition: 'all 0.2s',
-            }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>📄</div>
-            <div style={{ color: S.text, fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-              Arraste XMLs de NF-e ou NFS-e aqui
+          <div onClick={()=>inputRef.current.click()}
+            onDragOver={e=>{e.preventDefault();setDragging(true)}}
+            onDragLeave={()=>setDragging(false)}
+            onDrop={e=>{e.preventDefault();setDragging(false);addFiles(e.dataTransfer.files)}}
+            style={{border:`2px dashed ${dragging?C.green:C.surface2}`,borderRadius:12,padding:'36px 20px',
+              textAlign:'center',cursor:'pointer',background:dragging?'#00c89608':C.surface,transition:'all 0.2s'}}>
+            <div style={{fontSize:32,marginBottom:10}}>📄</div>
+            <div style={{color:C.text,fontSize:15,fontWeight:600,marginBottom:6}}>Arraste XMLs de NF-e / NFS-e ou PDFs (DANFE) aqui</div>
+            <div style={{color:C.text2,fontSize:13}}>ou clique para selecionar · múltiplos arquivos · máx. 5 MB</div>
+            <div style={{display:'flex',gap:8,justifyContent:'center',marginTop:12}}>
+              <Badge color="blue">XML</Badge>
+              <Badge color="amber">PDF</Badge>
             </div>
-            <div style={{ color: S.text2, fontSize: 13 }}>
-              ou clique para selecionar · múltiplos arquivos aceitos · máx. 5 MB por arquivo
-            </div>
-            <input ref={inputRef} type="file" accept=".xml" multiple style={{ display: 'none' }}
-              onChange={e => addFiles(e.target.files)} />
+            <input ref={inputRef} type="file" accept=".xml,.pdf" multiple style={{display:'none'}} onChange={e=>addFiles(e.target.files)} />
           </div>
 
-          {files.length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <div style={{ color: S.text2, fontSize: 12, marginBottom: 8 }}>
-                {files.length} arquivo{files.length > 1 ? 's' : ''} carregado{files.length > 1 ? 's' : ''}
-              </div>
-              {files.map((entry, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                  background: S.surface2, borderRadius: 8, marginBottom: 6 }}>
-                  <span style={{ color: S.green, fontSize: 14 }}>📎</span>
-                  <span style={{ flex: 1, color: S.text, fontSize: 13, fontFamily: 'IBM Plex Mono, monospace' }}>
-                    {entry.file.name}
-                  </span>
-                  <span style={{ color: S.text2, fontSize: 11 }}>
-                    {(entry.file.size / 1024).toFixed(1)} KB
-                  </span>
-                  <button onClick={() => removeFile(idx)}
-                    style={{ background: 'none', border: 'none', color: S.red, cursor: 'pointer', fontSize: 16, padding: '0 4px' }}>
-                    ×
-                  </button>
+          {entries.length > 0 && (
+            <div style={{marginTop:14}}>
+              <div style={{color:C.text2,fontSize:12,marginBottom:8}}>{entries.length} arquivo{entries.length>1?'s':''} carregado{entries.length>1?'s':''}</div>
+              {entries.map((e, i) => (
+                <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',background:C.surface2,borderRadius:8,marginBottom:6}}>
+                  <span style={{fontSize:14}}>{e.type==='pdf'?'📕':'📎'}</span>
+                  <span style={{flex:1,color:C.text,fontSize:13,fontFamily:'IBM Plex Mono,monospace'}}>{e.file.name}</span>
+                  <Badge color={e.type==='pdf'?'amber':'blue'}>{e.type.toUpperCase()}</Badge>
+                  <span style={{color:C.text2,fontSize:11}}>{(e.file.size/1024).toFixed(1)} KB</span>
+                  <button onClick={()=>removeFile(i)} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
                 </div>
               ))}
             </div>
@@ -754,40 +550,35 @@ RESPONDA APENAS EM JSON com esta estrutura exata:
       );
     }
 
-    function TabItens({ itens, itens_calc }) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TAX ANALYSIS RESULT CARDS
+    // ═══════════════════════════════════════════════════════════════════════════
+    function TabItens({ itens, calc }) {
       return (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${S.surface2}` }}>
-                {['Nº','Descrição','NCM','Valor','ICMS','PIS/COFINS','IBS calc.','CBS calc.','IS','Δ%'].map(h => (
-                  <th key={h} style={{ padding: '8px 10px', textAlign: 'right', color: S.text2,
-                    fontFamily: 'IBM Plex Mono, monospace', fontWeight: 500, whiteSpace: 'nowrap',
-                    textAlign: h === 'Descrição' || h === 'NCM' ? 'left' : 'right' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr style={{borderBottom:`1px solid ${C.surface2}`}}>
+              {['Nº','Descrição','NCM/NBS','Valor','ICMS','PIS/COF','IBS calc.','CBS calc.','IS','Δ%'].map(h => (
+                <th key={h} style={{padding:'8px 10px',color:C.text2,fontFamily:'IBM Plex Mono,monospace',fontWeight:500,whiteSpace:'nowrap',textAlign:h==='Descrição'||h==='NCM/NBS'?'left':'right'}}>{h}</th>
+              ))}
+            </tr></thead>
             <tbody>
-              {itens.map((item, idx) => {
-                const c = itens_calc[idx];
-                const atual = (item.tributos_declarados.icms.valor || 0) + (item.tributos_declarados.pis.valor || 0) +
-                              (item.tributos_declarados.cofins.valor || 0) + (item.tributos_declarados.iss.valor || 0);
-                const delta = c ? ((c.total_novo - atual) / (atual || 1)) * 100 : null;
+              {itens.map((item, i) => {
+                const c = calc[i];
+                const atual = (item.tributos_declarados.icms.valor||0)+(item.tributos_declarados.pis.valor||0)+(item.tributos_declarados.cofins.valor||0)+(item.tributos_declarados.iss.valor||0);
+                const delta = c ? ((c.total_novo-atual)/(atual||1))*100 : null;
                 return (
-                  <tr key={idx} style={{ borderBottom: `1px solid ${S.surface2}20` }}>
-                    <td style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.numero}</td>
-                    <td style={{ padding: '8px 10px', color: S.text, maxWidth: 200 }}>{item.descricao}</td>
-                    <td style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.ncm || item.nbs || '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL(item.valor_total)}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL(item.tributos_declarados.icms.valor)}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{BRL((item.tributos_declarados.pis.valor || 0) + (item.tributos_declarados.cofins.valor || 0))}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.ibs_total) : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.cbs.valor) : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: c && c.is > 0 ? S.amber : S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.is) : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace',
-                      color: delta === null ? S.text2 : delta < 0 ? S.green : delta > 0 ? S.red : S.text2 }}>
-                      {delta !== null ? PCT(delta) : '—'}
-                    </td>
+                  <tr key={i} style={{borderBottom:`1px solid ${C.surface2}20`}}>
+                    <td style={{padding:'8px 10px',color:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{item.numero}</td>
+                    <td style={{padding:'8px 10px',color:C.text,maxWidth:180}}>{item.descricao}</td>
+                    <td style={{padding:'8px 10px',color:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{item.ncm||item.nbs||'—'}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:C.text,fontFamily:'IBM Plex Mono,monospace'}}>{BRL(item.valor_total)}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{BRL(item.tributos_declarados.icms.valor)}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{BRL((item.tributos_declarados.pis.valor||0)+(item.tributos_declarados.cofins.valor||0))}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace'}}>{c?BRL(c.ibs_total):'—'}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace'}}>{c?BRL(c.cbs):'—'}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',color:c&&c.is>0?C.amber:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{c?BRL(c.is):'—'}</td>
+                    <td style={{padding:'8px 10px',textAlign:'right',fontFamily:'IBM Plex Mono,monospace',color:delta===null?C.text2:delta<0?C.green:delta>0?C.red:C.text2}}>{delta!==null?PCT(delta):'—'}</td>
                   </tr>
                 );
               })}
@@ -797,241 +588,135 @@ RESPONDA APENAS EM JSON com esta estrutura exata:
       );
     }
 
-    function TabComparativo({ comparativo, tributos_dec, totais, anoEmissao }) {
-      const maxVal = Math.max(comparativo.atual, comparativo.novo, 1);
+    function TabComp({ comparativo, decTot, totais, ano }) {
+      const maxV = Math.max(comparativo.atual, comparativo.novo, 1);
       return (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-            {/* Sistema Atual */}
-            <div style={{ background: S.surface2, borderRadius: 8, padding: 16 }}>
-              <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 12 }}>SISTEMA ATUAL</div>
-              {[
-                ['ICMS',   tributos_dec.icms?.valor],
-                ['PIS',    tributos_dec.pis?.valor],
-                ['COFINS', tributos_dec.cofins?.valor],
-                ['IPI',    tributos_dec.ipi?.valor],
-                ['ISS',    tributos_dec.iss?.valor],
-              ].map(([label, val]) => val > 0 ? (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <span style={{ color: S.text2, fontSize: 13 }}>{label}</span>
-                  <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>{BRL(val)}</span>
-                </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+            <div style={{background:C.surface2,borderRadius:8,padding:14}}>
+              <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>SISTEMA ATUAL</div>
+              {[['ICMS',decTot.icms?.valor],['PIS',decTot.pis?.valor],['COFINS',decTot.cofins?.valor],['IPI',decTot.ipi?.valor],['ISS',decTot.iss?.valor]].map(([l,v]) => v>0 ? (
+                <div key={l} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.text2,fontSize:12}}>{l}</span><span style={{color:C.text,fontFamily:'IBM Plex Mono,monospace',fontSize:12}}>{BRL(v)}</span></div>
               ) : null)}
-              <div style={{ borderTop: `1px solid ${S.surface}`, paddingTop: 10, marginTop: 10,
-                display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: S.text, fontWeight: 600 }}>Total</span>
-                <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{BRL(comparativo.atual)}</span>
-              </div>
-              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>{comparativo.atual_pct}% da nota</div>
-              <div style={{ height: 6, background: S.surface, borderRadius: 3, marginTop: 10 }}>
-                <div style={{ height: 6, background: S.amber, borderRadius: 3, width: `${(comparativo.atual / maxVal) * 100}%` }} />
-              </div>
+              <div style={{borderTop:`1px solid ${C.surface}`,paddingTop:8,marginTop:8,display:'flex',justifyContent:'space-between'}}><span style={{color:C.text,fontWeight:600,fontSize:13}}>Total</span><span style={{color:C.text,fontFamily:'IBM Plex Mono,monospace',fontWeight:600}}>{BRL(comparativo.atual)}</span></div>
+              <div style={{color:C.text2,fontSize:11,marginTop:4}}>{comparativo.atual_pct}% da nota</div>
+              <div style={{height:5,background:C.surface,borderRadius:3,marginTop:8}}><div style={{height:5,background:C.amber,borderRadius:3,width:`${(comparativo.atual/maxV)*100}%`}} /></div>
             </div>
-            {/* Sistema Novo */}
-            <div style={{ background: S.surface2, borderRadius: 8, padding: 16, border: `1px solid ${S.green}30` }}>
-              <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 12 }}>
-                SISTEMA NOVO ({anoEmissao}+)
-              </div>
-              {[
-                ['CBS',  totais.cbs],
-                ['IBS',  totais.ibs],
-                ['IS',   totais.is],
-              ].map(([label, val]) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <span style={{ color: S.text2, fontSize: 13 }}>{label}</span>
-                  <span style={{ color: val > 0 ? S.green : S.text2, fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>{BRL(val)}</span>
-                </div>
+            <div style={{background:C.surface2,borderRadius:8,padding:14,border:`1px solid ${C.green}30`}}>
+              <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>SISTEMA NOVO ({ano}+)</div>
+              {[['CBS',totais.cbs],['IBS',totais.ibs],['IS',totais.is]].map(([l,v]) => (
+                <div key={l} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.text2,fontSize:12}}>{l}</span><span style={{color:v>0?C.green:C.text2,fontFamily:'IBM Plex Mono,monospace',fontSize:12}}>{BRL(v)}</span></div>
               ))}
-              <div style={{ borderTop: `1px solid ${S.surface}`, paddingTop: 10, marginTop: 10,
-                display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: S.text, fontWeight: 600 }}>Total</span>
-                <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{BRL(comparativo.novo)}</span>
-              </div>
-              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>{comparativo.novo_pct}% da nota</div>
-              <div style={{ height: 6, background: S.surface, borderRadius: 3, marginTop: 10 }}>
-                <div style={{ height: 6, background: S.green, borderRadius: 3, width: `${(comparativo.novo / maxVal) * 100}%` }} />
-              </div>
+              <div style={{borderTop:`1px solid ${C.surface}`,paddingTop:8,marginTop:8,display:'flex',justifyContent:'space-between'}}><span style={{color:C.text,fontWeight:600,fontSize:13}}>Total</span><span style={{color:C.text,fontFamily:'IBM Plex Mono,monospace',fontWeight:600}}>{BRL(comparativo.novo)}</span></div>
+              <div style={{color:C.text2,fontSize:11,marginTop:4}}>{comparativo.novo_pct}% da nota</div>
+              <div style={{height:5,background:C.surface,borderRadius:3,marginTop:8}}><div style={{height:5,background:C.green,borderRadius:3,width:`${(comparativo.novo/maxV)*100}%`}} /></div>
             </div>
           </div>
-          {/* Delta */}
-          <div style={{ background: comparativo.tendencia === 'reducao' ? '#00c89615' : comparativo.tendencia === 'aumento' ? '#ef444415' : S.surface2,
-            border: `1px solid ${comparativo.tendencia === 'reducao' ? S.green : comparativo.tendencia === 'aumento' ? S.red : S.surface2}`,
-            borderRadius: 8, padding: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 28, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600,
-              color: comparativo.tendencia === 'reducao' ? S.green : comparativo.tendencia === 'aumento' ? S.red : S.text }}>
-              {comparativo.tendencia === 'reducao' ? '↓' : comparativo.tendencia === 'aumento' ? '↑' : '→'}{' '}
-              {BRL(Math.abs(comparativo.delta))}
+          <div style={{background:comparativo.tendencia==='reducao'?'#00c89615':comparativo.tendencia==='aumento'?'#ef444415':C.surface2,border:`1px solid ${comparativo.tendencia==='reducao'?C.green:comparativo.tendencia==='aumento'?C.red:C.surface2}`,borderRadius:8,padding:16,textAlign:'center'}}>
+            <div style={{fontSize:26,fontFamily:'IBM Plex Mono,monospace',fontWeight:600,color:comparativo.tendencia==='reducao'?C.green:comparativo.tendencia==='aumento'?C.red:C.text}}>
+              {comparativo.tendencia==='reducao'?'↓':comparativo.tendencia==='aumento'?'↑':'→'} {BRL(Math.abs(comparativo.delta))}
             </div>
-            <div style={{ color: S.text2, fontSize: 13, marginTop: 4 }}>
-              {comparativo.tendencia === 'reducao' ? 'Redução' : comparativo.tendencia === 'aumento' ? 'Aumento' : 'Sem variação'} de carga tributária
-              {comparativo.delta_pct !== null ? ` · ${PCT(comparativo.delta_pct)}` : ''}
+            <div style={{color:C.text2,fontSize:13,marginTop:4}}>
+              {comparativo.tendencia==='reducao'?'Redução':comparativo.tendencia==='aumento'?'Aumento':'Sem variação'} de carga
+              {comparativo.delta_pct!==null?` · ${PCT(comparativo.delta_pct)}`:''}
             </div>
           </div>
         </div>
       );
     }
 
-    function TabCreditos({ itens, itens_calc, destinatario, totais }) {
-      const aviso = destinatario.tipo === 'PF' || !destinatario.contribuinte;
+    function TabCreditos({ itens, calc, dest, totais }) {
       return (
         <div>
-          {aviso && (
-            <AlertBadge tipo="atencao" msg="Destinatário não contribuinte — crédito de IBS/CBS pode não ser aproveitável" />
-          )}
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${S.surface2}` }}>
-                {['Item','Descrição','Crédito CBS','Crédito IBS','Total'].map(h => (
-                  <th key={h} style={{ padding: '8px 10px', color: S.text2, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 500,
-                    textAlign: h === 'Descrição' ? 'left' : 'right' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+          {(!dest.contribuinte||dest.tipo==='PF') && <AlertRow tipo="atencao" msg="Destinatário não contribuinte — crédito IBS/CBS pode não ser aproveitável" />}
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,marginTop:8}}>
+            <thead><tr style={{borderBottom:`1px solid ${C.surface2}`}}>
+              {['Item','Descrição','Créd. CBS','Créd. IBS','Total'].map(h=>(
+                <th key={h} style={{padding:'8px 10px',color:C.text2,fontFamily:'IBM Plex Mono,monospace',fontWeight:500,textAlign:h==='Descrição'?'left':'right'}}>{h}</th>
+              ))}
+            </tr></thead>
             <tbody>
-              {itens.map((item, idx) => {
-                const c = itens_calc[idx];
-                return (
-                  <tr key={idx} style={{ borderBottom: `1px solid ${S.surface2}20` }}>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.text2, fontFamily: 'IBM Plex Mono, monospace' }}>{item.numero}</td>
-                    <td style={{ padding: '8px 10px', color: S.text }}>{item.descricao}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.credito_cbs) : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace' }}>{c ? BRL(c.credito_ibs) : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }}>{c ? BRL(c.credito_cbs + c.credito_ibs) : '—'}</td>
-                  </tr>
-                );
+              {itens.map((item, i) => {
+                const c = calc[i];
+                return <tr key={i} style={{borderBottom:`1px solid ${C.surface2}20`}}>
+                  <td style={{padding:'8px 10px',textAlign:'right',color:C.text2,fontFamily:'IBM Plex Mono,monospace'}}>{item.numero}</td>
+                  <td style={{padding:'8px 10px',color:C.text}}>{item.descricao}</td>
+                  <td style={{padding:'8px 10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace'}}>{c?BRL(c.credito_cbs):'—'}</td>
+                  <td style={{padding:'8px 10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace'}}>{c?BRL(c.credito_ibs):'—'}</td>
+                  <td style={{padding:'8px 10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace',fontWeight:600}}>{c?BRL(c.credito_cbs+c.credito_ibs):'—'}</td>
+                </tr>;
               })}
             </tbody>
-            <tfoot>
-              <tr style={{ borderTop: `1px solid ${S.surface2}` }}>
-                <td colSpan={2} style={{ padding: '10px', color: S.text, fontWeight: 600 }}>Total aproveitável</td>
-                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_cbs)}</td>
-                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_ibs)}</td>
-                <td style={{ padding: '10px', textAlign: 'right', color: S.green, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }}>{BRL(totais.credito_cbs + totais.credito_ibs)}</td>
-              </tr>
-            </tfoot>
+            <tfoot><tr style={{borderTop:`1px solid ${C.surface2}`}}>
+              <td colSpan={2} style={{padding:'10px',color:C.text,fontWeight:600}}>Total aproveitável</td>
+              <td style={{padding:'10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace',fontWeight:700}}>{BRL(totais.credito_cbs)}</td>
+              <td style={{padding:'10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace',fontWeight:700}}>{BRL(totais.credito_ibs)}</td>
+              <td style={{padding:'10px',textAlign:'right',color:C.green,fontFamily:'IBM Plex Mono,monospace',fontWeight:700}}>{BRL(totais.credito_cbs+totais.credito_ibs)}</td>
+            </tr></tfoot>
           </table>
-          <div style={{ marginTop: 12, color: S.text2, fontSize: 11, padding: '8px 12px',
-            background: S.surface2, borderRadius: 6 }}>
-            Crédito válido apenas se o destinatário for contribuinte do IBS/CBS (PJ fora do Simples Nacional)
-          </div>
+          <div style={{marginTop:10,color:C.text2,fontSize:11,padding:'8px 12px',background:C.surface2,borderRadius:6}}>Crédito válido apenas se o destinatário for contribuinte do IBS/CBS (PJ fora do Simples Nacional)</div>
         </div>
       );
     }
 
     function TabSplit({ split, nota }) {
-      const pctRetido = split.percentual;
       return (
         <div>
-          <AlertBadge tipo="simulacao"
-            msg={`A partir de 2027, ${BRL(split.valor_retido)} serão retidos automaticamente no momento do pagamento`} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
-            {[
-              ['Valor total da nota',    BRL(nota.valor_total_nota), S.text ],
-              ['Valor retido (IBS+CBS)', BRL(split.valor_retido),    S.red  ],
-              ['Valor líquido recebido', BRL(split.valor_liquido),   S.green],
-              ['Percentual retido',      `${pctRetido}%`,            S.amber],
-            ].map(([label, val, color]) => (
-              <div key={label} style={{ background: S.surface2, borderRadius: 8, padding: 14 }}>
-                <div style={{ color: S.text2, fontSize: 11, marginBottom: 6 }}>{label}</div>
-                <div style={{ color, fontFamily: 'IBM Plex Mono, monospace', fontSize: 18, fontWeight: 600 }}>{val}</div>
-              </div>
+          <AlertRow tipo="simulacao" msg={`A partir de 2027, ${BRL(split.valor_retido)} serão retidos automaticamente no momento do pagamento`} />
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:14}}>
+            {[['Valor total da nota',BRL(nota.valor_total_nota),C.text],['Valor retido (IBS+CBS)',BRL(split.valor_retido),C.red],['Valor líquido recebido',BRL(split.valor_liquido),C.green],['Percentual retido',`${split.percentual}%`,C.amber]].map(([l,v,color])=>(
+              <div key={l} style={{background:C.surface2,borderRadius:8,padding:12}}><div style={{color:C.text2,fontSize:11,marginBottom:4}}>{l}</div><div style={{color,fontFamily:'IBM Plex Mono,monospace',fontSize:18,fontWeight:600}}>{v}</div></div>
             ))}
           </div>
-          <div style={{ marginTop: 20 }}>
-            <div style={{ color: S.text2, fontSize: 11, marginBottom: 8 }}>Proporção retida × recebida</div>
-            <div style={{ height: 20, background: S.surface2, borderRadius: 10, overflow: 'hidden', display: 'flex' }}>
-              <div style={{ width: `${pctRetido}%`, background: S.red, borderRadius: '10px 0 0 10px',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 10, color: 'white', fontFamily: 'IBM Plex Mono, monospace' }}>
-                {pctRetido > 5 ? `${pctRetido}%` : ''}
-              </div>
-              <div style={{ flex: 1, background: S.green, borderRadius: '0 10px 10px 0',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 10, color: '#0f1117', fontFamily: 'IBM Plex Mono, monospace' }}>
-                {100 - pctRetido}%
-              </div>
+          <div style={{marginTop:16}}>
+            <div style={{color:C.text2,fontSize:11,marginBottom:6}}>Proporção retida × recebida</div>
+            <div style={{height:20,background:C.surface2,borderRadius:10,overflow:'hidden',display:'flex'}}>
+              <div style={{width:`${split.percentual}%`,background:C.red,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'white',fontFamily:'IBM Plex Mono,monospace'}}>{split.percentual>5?`${split.percentual}%`:''}</div>
+              <div style={{flex:1,background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'#0f1117',fontFamily:'IBM Plex Mono,monospace'}}>{100-split.percentual}%</div>
             </div>
           </div>
         </div>
       );
     }
 
-    function NoteCard({ resultado, analiseIA, defaultOpen }) {
-      const [open, setOpen] = useState(defaultOpen || false);
-      const [aba, setAba] = useState('itens');
+    function ResultCard({ resultado, analiseIA, defaultOpen }) {
+      const [open, setOpen] = useState(defaultOpen||false);
+      const [aba,  setAba]  = useState('itens');
       const { nota, itens_calc, comparativo, split, alertas, totais, tributos_dec_totais } = resultado;
-
-      const chaveResumida = nota.chave_acesso
-        ? `${nota.chave_acesso.substring(0, 4)}...${nota.chave_acesso.substring(40)}`
-        : 'Sem chave';
-
       const analiseNota = analiseIA?.analise_por_nota?.find(a => a.chave_acesso === nota.chave_acesso);
-      const todosAlertas = [
-        ...alertas,
-        ...(analiseNota?.alertas?.map(a => ({ tipo: a.tipo, msg: a.mensagem })) || []),
-      ];
+      const todosAlertas = [...alertas, ...(analiseNota?.alertas?.map(a=>({tipo:a.tipo,msg:a.mensagem}))||[])];
 
       return (
-        <div style={{ background: S.surface, borderRadius: 12, marginBottom: 12,
-          border: `1px solid ${S.surface2}`, overflow: 'hidden' }}>
-          {/* Card header */}
-          <div onClick={() => setOpen(!open)} style={{ padding: '16px 20px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ color: S.text2, fontSize: 20 }}>{nota.tipo === 'NFSe' ? '🧾' : '📃'}</span>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ color: S.text, fontWeight: 600, fontSize: 14 }}>
-                {nota.emitente.nome || 'Emitente'} &nbsp;
-                <span style={{ color: S.text2, fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, fontWeight: 400 }}>
-                  {nota.emitente.cnpj}
-                </span>
-              </div>
-              <div style={{ color: S.text2, fontSize: 12, marginTop: 2, fontFamily: 'IBM Plex Mono, monospace' }}>
-                {chaveResumida} · {nota.data_emissao}
-              </div>
+        <div style={{background:C.surface,borderRadius:12,marginBottom:12,border:`1px solid ${C.surface2}`,overflow:'hidden'}}>
+          <div onClick={()=>setOpen(!open)} style={{padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+            <span style={{fontSize:20}}>{nota.tipo==='NFSe'?'🧾':'📃'}</span>
+            <div style={{flex:1,minWidth:180}}>
+              <div style={{color:C.text,fontWeight:600,fontSize:14}}>{nota.emitente.nome||'—'} <span style={{color:C.text2,fontFamily:'IBM Plex Mono,monospace',fontSize:11,fontWeight:400}}>{nota.emitente.cnpj}</span></div>
+              <div style={{color:C.text2,fontSize:12,marginTop:2,fontFamily:'IBM Plex Mono,monospace'}}>{nota.data_emissao} · {nota.arquivo_original}</div>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Badge color={nota.tipo === 'NFe' ? 'blue' : 'green'}>{nota.tipo}</Badge>
-              <Badge color={nota.cenario === 'A' ? 'green' : 'amber'}>
-                {nota.cenario === 'A' ? 'IBS/CBS Declarado' : 'Projeção 2027+'}
-              </Badge>
-              {comparativo.tendencia !== 'neutro' && (
-                <Badge color={comparativo.tendencia === 'reducao' ? 'green' : 'red'}>
-                  {comparativo.tendencia === 'reducao' ? '↓' : '↑'} {PCT(comparativo.delta_pct)}
-                </Badge>
-              )}
-              <span style={{ color: S.text, fontFamily: 'IBM Plex Mono, monospace', fontSize: 14, fontWeight: 600 }}>
-                {BRL(nota.valor_total_nota)}
-              </span>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <Badge color={nota.tipo==='NFe'?'blue':'green'}>{nota.tipo}</Badge>
+              {nota._source==='pdf' && <Badge color="blue">PDF · IA</Badge>}
+              <Badge color={nota.cenario==='A'?'green':'amber'}>{nota.cenario==='A'?'IBS/CBS Declarado':'Projeção 2027+'}</Badge>
+              {comparativo.tendencia!=='neutro' && <Badge color={comparativo.tendencia==='reducao'?'green':'red'}>{comparativo.tendencia==='reducao'?'↓':'↑'} {PCT(comparativo.delta_pct)}</Badge>}
+              <span style={{color:C.green,fontFamily:'IBM Plex Mono,monospace',fontSize:14,fontWeight:600}}>{BRL(nota.valor_total_nota)}</span>
             </div>
-            <span style={{ color: S.text2, fontSize: 18 }}>{open ? '▲' : '▼'}</span>
+            <span style={{color:C.text2,fontSize:18}}>{open?'▲':'▼'}</span>
           </div>
-
           {open && (
-            <div style={{ borderTop: `1px solid ${S.surface2}`, padding: '16px 20px' }}>
-              {/* Alerts */}
-              {todosAlertas.length > 0 && (
-                <div style={{ marginBottom: 16 }}>
-                  {todosAlertas.map((a, idx) => <AlertBadge key={idx} tipo={a.tipo} msg={a.msg} />)}
-                </div>
-              )}
-
-              {/* Tabs */}
-              <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: `1px solid ${S.surface2}`, paddingBottom: 0 }}>
-                {['itens','comparativo','creditos','split'].map(tab => (
-                  <button key={tab} onClick={() => setAba(tab)}
-                    style={{ padding: '8px 16px', background: 'none', border: 'none', cursor: 'pointer',
-                      borderBottom: `2px solid ${aba === tab ? S.green : 'transparent'}`,
-                      color: aba === tab ? S.green : S.text2, fontSize: 13, fontWeight: 500,
-                      textTransform: 'capitalize', transition: 'all 0.15s' }}>
-                    {tab === 'split' ? 'Split Payment' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            <div style={{borderTop:`1px solid ${C.surface2}`,padding:'14px 20px'}}>
+              {todosAlertas.length>0 && <div style={{marginBottom:14}}>{todosAlertas.map((a,i)=><AlertRow key={i} tipo={a.tipo} msg={a.msg}/>)}</div>}
+              <div style={{display:'flex',gap:4,marginBottom:14,borderBottom:`1px solid ${C.surface2}`}}>
+                {['itens','comparativo','creditos','split'].map(tab=>(
+                  <button key={tab} onClick={()=>setAba(tab)} style={{padding:'8px 14px',background:'none',border:'none',cursor:'pointer',borderBottom:`2px solid ${aba===tab?C.green:'transparent'}`,color:aba===tab?C.green:C.text2,fontSize:13,fontWeight:500,transition:'all 0.15s'}}>
+                    {tab==='split'?'Split Payment':tab.charAt(0).toUpperCase()+tab.slice(1)}
                   </button>
                 ))}
               </div>
-
-              {aba === 'itens'       && <TabItens itens={nota.itens} itens_calc={itens_calc} />}
-              {aba === 'comparativo' && <TabComparativo comparativo={comparativo} tributos_dec={tributos_dec_totais} totais={totais} anoEmissao={nota.ano_emissao} />}
-              {aba === 'creditos'    && <TabCreditos itens={nota.itens} itens_calc={itens_calc} destinatario={nota.destinatario} totais={totais} />}
-              {aba === 'split'       && <TabSplit split={split} nota={nota} />}
+              {aba==='itens'       && <TabItens itens={nota.itens} calc={itens_calc} />}
+              {aba==='comparativo' && <TabComp  comparativo={comparativo} decTot={tributos_dec_totais} totais={totais} ano={nota.ano_emissao} />}
+              {aba==='creditos'    && <TabCreditos itens={nota.itens} calc={itens_calc} dest={nota.destinatario} totais={totais} />}
+              {aba==='split'       && <TabSplit split={split} nota={nota} />}
             </div>
           )}
         </div>
@@ -1039,65 +724,31 @@ RESPONDA APENAS EM JSON com esta estrutura exata:
     }
 
     function LoteSummary({ resultados, analiseIA, loadingIA }) {
-      const totalNota = resultados.reduce((s, r) => s + r.nota.valor_total_nota, 0);
-      const totalAtual = resultados.reduce((s, r) => s + r.comparativo.atual, 0);
-      const totalNovo  = resultados.reduce((s, r) => s + r.comparativo.novo, 0);
-      const totalCredito = resultados.reduce((s, r) => s + r.totais.credito_cbs + r.totais.credito_ibs, 0);
-      const totalSplit   = resultados.reduce((s, r) => s + r.split.valor_retido, 0);
-      const deltaTotal = round2(totalNovo - totalAtual);
-
+      const totNota    = resultados.reduce((s,r)=>s+r.nota.valor_total_nota,0);
+      const totAtual   = resultados.reduce((s,r)=>s+r.comparativo.atual,0);
+      const totNovo    = resultados.reduce((s,r)=>s+r.comparativo.novo,0);
+      const totCredito = resultados.reduce((s,r)=>s+r.totais.credito_cbs+r.totais.credito_ibs,0);
+      const totSplit   = resultados.reduce((s,r)=>s+r.split.valor_retido,0);
+      const delta      = r2(totNovo-totAtual);
       return (
-        <div style={{ background: S.surface, borderRadius: 12, padding: 20, marginBottom: 16,
-          border: `1px solid ${S.green}30` }}>
-          <div style={{ color: S.green, fontWeight: 600, fontSize: 13, letterSpacing: '0.1em', marginBottom: 16 }}>
-            RESUMO DO LOTE — {resultados.length} NOTAS
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20 }}>
-            {[
-              ['Valor total das notas', BRL(totalNota), S.text],
-              ['Carga tributária atual', BRL(totalAtual), S.amber],
-              ['Carga tributária nova',  BRL(totalNovo),  S.green],
-              ['Variação total', `${deltaTotal < 0 ? '↓' : '↑'} ${BRL(Math.abs(deltaTotal))}`, deltaTotal < 0 ? S.green : S.red],
-              ['Créditos gerados', BRL(totalCredito), S.green],
-              ['Split payment (retido)', BRL(totalSplit), S.red],
-            ].map(([label, val, color]) => (
-              <div key={label} style={{ background: S.surface2, borderRadius: 8, padding: 12 }}>
-                <div style={{ color: S.text2, fontSize: 11, marginBottom: 4 }}>{label}</div>
-                <div style={{ color, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, fontSize: 15 }}>{val}</div>
-              </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,marginBottom:14,border:`1px solid ${C.green}30`}}>
+          <div style={{color:C.green,fontWeight:600,fontSize:12,letterSpacing:'0.1em',marginBottom:14}}>RESUMO DO LOTE — {resultados.length} NOTAS</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:10,marginBottom:20}}>
+            {[['Valor total',BRL(totNota),C.text],['Carga atual',BRL(totAtual),C.amber],['Carga nova',BRL(totNovo),C.green],['Variação',`${delta<0?'↓':'↑'} ${BRL(Math.abs(delta))}`,delta<0?C.green:C.red],['Créditos',BRL(totCredito),C.green],['Split retido',BRL(totSplit),C.red]].map(([l,v,color])=>(
+              <div key={l} style={{background:C.surface2,borderRadius:8,padding:12}}><div style={{color:C.text2,fontSize:11,marginBottom:4}}>{l}</div><div style={{color,fontFamily:'IBM Plex Mono,monospace',fontWeight:600,fontSize:14}}>{v}</div></div>
             ))}
           </div>
-
-          {/* Claude AI Analysis */}
           {loadingIA ? (
-            <div style={{ textAlign: 'center', padding: 20, color: S.text2 }}>
-              <div style={{ fontSize: 24, marginBottom: 8 }}>⚡</div>
-              <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>Gerando análise tributária...</div>
-            </div>
+            <div style={{textAlign:'center',padding:16,color:C.text2}}><div style={{fontSize:20,marginBottom:6}}>⚡</div><div style={{fontFamily:'IBM Plex Mono,monospace',fontSize:12}}>Gerando análise tributária...</div></div>
           ) : analiseIA ? (
             <div>
-              <div style={{ borderTop: `1px solid ${S.surface2}`, paddingTop: 16, marginBottom: 12 }}>
-                <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 8 }}>
-                  ANÁLISE IA — RESUMO EXECUTIVO
+              <div style={{borderTop:`1px solid ${C.surface2}`,paddingTop:14,marginBottom:10}}><div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:6}}>RESUMO EXECUTIVO</div><p style={{color:C.text,fontSize:13,lineHeight:1.7}}>{analiseIA.resumo_executivo}</p></div>
+              {analiseIA.recomendacoes?.length>0 && <div><div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:8}}>RECOMENDAÇÕES</div>{analiseIA.recomendacoes.map((r,i)=>(
+                <div key={i} style={{display:'flex',gap:10,padding:'8px 12px',background:C.surface2,borderRadius:6,marginBottom:6,alignItems:'flex-start'}}>
+                  <Badge color={r.prioridade==='alta'?'red':r.prioridade==='media'?'amber':'green'}>{r.prioridade}</Badge>
+                  <span style={{color:C.text,fontSize:13}}>{r.texto}</span>
                 </div>
-                <p style={{ color: S.text, fontSize: 13, lineHeight: 1.6 }}>{analiseIA.resumo_executivo}</p>
-              </div>
-              {analiseIA.recomendacoes?.length > 0 && (
-                <div>
-                  <div style={{ color: S.text2, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', marginBottom: 8 }}>
-                    RECOMENDAÇÕES ESTRATÉGICAS
-                  </div>
-                  {analiseIA.recomendacoes.map((r, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: 10, padding: '8px 12px',
-                      background: S.surface2, borderRadius: 6, marginBottom: 6, alignItems: 'flex-start' }}>
-                      <Badge color={r.prioridade === 'alta' ? 'red' : r.prioridade === 'media' ? 'amber' : 'green'}>
-                        {r.prioridade}
-                      </Badge>
-                      <span style={{ color: S.text, fontSize: 13 }}>{r.texto}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              ))}</div>}
             </div>
           ) : null}
         </div>
@@ -1106,186 +757,224 @@ RESPONDA APENAS EM JSON com esta estrutura exata:
 
     function SettingsPanel({ endpoint, setEndpoint }) {
       const [show, setShow] = useState(false);
-      const isConfigured = endpoint && endpoint !== 'REPLACE_API_ENDPOINT' && endpoint.startsWith('http');
+      const ok = endpoint && endpoint !== 'REPLACE_API_ENDPOINT' && endpoint.startsWith('http');
       return (
-        <div style={{ marginBottom: 16 }}>
-          <button onClick={() => setShow(!show)}
-            style={{ background: 'none', border: `1px solid ${isConfigured ? S.green : S.amber}`, borderRadius: 6,
-              color: isConfigured ? S.green : S.amber, padding: '6px 14px', cursor: 'pointer', fontSize: 12,
-              fontFamily: 'IBM Plex Mono, monospace' }}>
-            {isConfigured ? '✓ API configurada' : '⚠ Configurar endpoint da API'}
+        <div style={{marginBottom:14}}>
+          <button onClick={()=>setShow(!show)} style={{background:'none',border:`1px solid ${ok?C.green:C.amber}`,borderRadius:6,color:ok?C.green:C.amber,padding:'5px 12px',cursor:'pointer',fontSize:12,fontFamily:'IBM Plex Mono,monospace'}}>
+            {ok?'✓ API configurada':'⚠ Configurar endpoint da API'}
           </button>
           {show && (
-            <div style={{ marginTop: 10, background: S.surface, borderRadius: 8, padding: 16,
-              border: `1px solid ${S.surface2}` }}>
-              <div style={{ color: S.text2, fontSize: 12, marginBottom: 8 }}>
-                URL do endpoint Lambda (após SAM deploy) ou proxy Claude:
-              </div>
-              <input value={endpoint}
-                onChange={e => { setEndpoint(e.target.value); localStorage.setItem('tributario_api_endpoint', e.target.value); }}
+            <div style={{marginTop:10,background:C.surface,borderRadius:8,padding:14,border:`1px solid ${C.surface2}`}}>
+              <div style={{color:C.text2,fontSize:12,marginBottom:6}}>URL do endpoint Lambda (após SAM deploy):</div>
+              <input value={endpoint} onChange={e=>{setEndpoint(e.target.value);localStorage.setItem('tributario_api_endpoint',e.target.value)}}
                 placeholder="https://xxxxxx.execute-api.us-east-1.amazonaws.com/prod/analyze"
-                style={{ width: '100%', background: S.surface2, border: `1px solid ${S.surface2}`,
-                  color: S.text, padding: '8px 12px', borderRadius: 6, fontSize: 12,
-                  fontFamily: 'IBM Plex Mono, monospace' }} />
-              <div style={{ color: S.text2, fontSize: 11, marginTop: 6 }}>
-                Execute <code style={{ color: S.green }}>sam deploy</code> e use a URL do output <code style={{ color: S.green }}>ApiEndpoint</code>
-              </div>
+                style={{width:'100%',background:C.surface2,border:`1px solid ${C.surface2}`,color:C.text,padding:'8px 12px',borderRadius:6,fontSize:12,fontFamily:'IBM Plex Mono,monospace'}} />
+              <div style={{color:C.text2,fontSize:11,marginTop:6}}>Após <code style={{color:C.green}}>sam deploy</code>, use o output <code style={{color:C.green}}>ApiEndpoint</code> (o endpoint /extract é derivado automaticamente)</div>
             </div>
           )}
         </div>
       );
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // MAIN APP
-    // ═══════════════════════════════════════════════════════════════
-    function App() {
-      const [arquivos, setArquivos]       = useState([]);
-      const [resultados, setResultados]   = useState([]);
-      const [analiseIA, setAnaliseIA]     = useState(null);
-      const [loading, setLoading]         = useState(false);
-      const [loadingIA, setLoadingIA]     = useState(false);
-      const [erroGlobal, setErroGlobal]   = useState(null);
-      const [apiEndpoint, setApiEndpoint] = useState(
-        () => localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP INDICATOR
+    // ═══════════════════════════════════════════════════════════════════════════
+    function StepBar({ step }) {
+      const steps = [
+        { id:'upload',    label:'Upload' },
+        { id:'extracted', label:'Campos Extraídos' },
+        { id:'analyzed',  label:'Análise Tributária' },
+      ];
+      const idx = steps.findIndex(s => s.id === step);
+      return (
+        <div style={{display:'flex',alignItems:'center',gap:0,marginBottom:24}}>
+          {steps.map((s, i) => (
+            <React.Fragment key={s.id}>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <div style={{width:24,height:24,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,
+                  background: i<idx ? C.green : i===idx ? C.green : C.surface2,
+                  color: i<=idx ? '#0f1117' : C.text2, fontFamily:'IBM Plex Mono,monospace'}}>
+                  {i < idx ? '✓' : i+1}
+                </div>
+                <span style={{fontSize:12,fontWeight: i===idx?600:400,color: i===idx?C.text:i<idx?C.green:C.text2}}>{s.label}</span>
+              </div>
+              {i < steps.length-1 && <div style={{flex:1,height:1,background: i<idx ? C.green : C.surface2,margin:'0 10px'}} />}
+            </React.Fragment>
+          ))}
+        </div>
       );
+    }
 
-      const analisar = async () => {
-        if (!arquivos.length) return;
-        setLoading(true);
-        setErroGlobal(null);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MAIN APP
+    // ═══════════════════════════════════════════════════════════════════════════
+    function App() {
+      const [arquivos,      setArquivos]      = useState([]);
+      const [step,          setStep]          = useState('upload');
+      const [extractedNotas,setExtractedNotas]= useState([]);
+      const [resultados,    setResultados]    = useState([]);
+      const [analiseIA,     setAnaliseIA]     = useState(null);
+      const [loadingExtract,setLoadingExtract]= useState(false);
+      const [loadingAnalyze,setLoadingAnalyze]= useState(false);
+      const [loadingIA,     setLoadingIA]     = useState(false);
+      const [extractErrors, setExtractErrors] = useState([]);
+      const [apiEndpoint,   setApiEndpoint]   = useState(() => localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT);
+
+      const apiOk = apiEndpoint && apiEndpoint !== 'REPLACE_API_ENDPOINT' && apiEndpoint.startsWith('http');
+
+      // ── STEP 1: Extract / Parse ─────────────────────────────────────────────
+      const handleExtract = async () => {
+        setLoadingExtract(true);
+        setExtractErrors([]);
+        setExtractedNotas([]);
         setResultados([]);
         setAnaliseIA(null);
 
-        const notas = await Promise.all(arquivos.map(async file => {
+        const results = await Promise.all(arquivos.map(async file => {
           try {
-            const text = await file.text();
-            const nota = parseXML(text, file.name);
-            return { ok: true, resultado: processarNota(nota) };
-          } catch (e) {
-            return { ok: false, arquivo: file.name, erro: e.message };
+            if (file.name.endsWith('.pdf')) {
+              if (!apiOk) throw new Error('Configure o endpoint da API para processar PDFs');
+              const buf    = await file.arrayBuffer();
+              const b64    = btoa(String.fromCharCode(...new Uint8Array(buf)));
+              const nota   = await extractPDF(b64, file.name, apiEndpoint);
+              nota._source = 'pdf';
+              return { ok:true, nota };
+            } else {
+              const text = await file.text();
+              const nota = parseXML(text, file.name);
+              return { ok:true, nota };
+            }
+          } catch(e) {
+            return { ok:false, arquivo:file.name, erro:e.message };
           }
         }));
 
-        const ok = notas.filter(n => n.ok).map(n => n.resultado);
-        const erros = notas.filter(n => !n.ok);
+        const ok  = results.filter(r=>r.ok).map(r=>r.nota);
+        const err = results.filter(r=>!r.ok);
+        setExtractErrors(err);
+        setExtractedNotas(ok);
+        setLoadingExtract(false);
+        if (ok.length > 0) setStep('extracted');
+      };
 
-        if (erros.length > 0 && ok.length === 0) {
-          setErroGlobal(`Falha ao processar: ${erros.map(e => `${e.arquivo}: ${e.erro}`).join('; ')}`);
-        } else if (erros.length > 0) {
-          // Add parse errors as alerts to the results
-          console.warn('Erros parciais:', erros);
-        }
+      // ── STEP 2: Tax Analysis ────────────────────────────────────────────────
+      const handleAnalyze = async () => {
+        setLoadingAnalyze(true);
+        const res = extractedNotas.map(processarNota);
+        setResultados(res);
+        setStep('analyzed');
+        setLoadingAnalyze(false);
 
-        setResultados(ok);
-        setLoading(false);
-
-        if (ok.length > 0) {
-          const apiOk = apiEndpoint && apiEndpoint !== 'REPLACE_API_ENDPOINT' && apiEndpoint.startsWith('http');
-          if (apiOk) {
-            setLoadingIA(true);
-            try {
-              const ia = await chamarClaudeAPI(ok, apiEndpoint);
-              setAnaliseIA(ia);
-            } catch (e) {
-              console.warn('Claude API indisponível:', e.message);
-            }
-            setLoadingIA(false);
-          }
+        if (res.length > 0 && apiOk) {
+          setLoadingIA(true);
+          try { setAnaliseIA(await chamarClaudeAPI(res, apiEndpoint)); } catch(e) { console.warn('Claude API:', e.message); }
+          setLoadingIA(false);
         }
       };
 
+      const resetToUpload = () => { setStep('upload'); setExtractedNotas([]); setResultados([]); setAnaliseIA(null); setExtractErrors([]); };
+
       return (
-        <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 16px' }}>
+        <div style={{maxWidth:980,margin:'0 auto',padding:'24px 16px'}}>
           {/* Header */}
-          <div className="no-print" style={{ marginBottom: 32 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-              <div>
-                <h1 style={{ fontSize: 22, fontWeight: 700, color: S.text, letterSpacing: '-0.02em' }}>
-                  Validador Tributário NF-e / NFS-e
-                </h1>
-                <p style={{ color: S.text2, fontSize: 13, marginTop: 4 }}>
-                  Reforma Tributária 2026 — LC 214/2025
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-                <Badge color="green">IBS</Badge>
-                <Badge color="green">CBS</Badge>
-                <Badge color="amber">IS</Badge>
-                <Badge color="blue">2026</Badge>
-              </div>
+          <div className="no-print" style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap',marginBottom:24}}>
+            <div>
+              <h1 style={{fontSize:22,fontWeight:700,color:C.text,letterSpacing:'-0.02em'}}>Validador Tributário NF-e / NFS-e</h1>
+              <p style={{color:C.text2,fontSize:13,marginTop:4}}>Reforma Tributária 2026 — LC 214/2025</p>
+            </div>
+            <div style={{display:'flex',gap:8,marginLeft:'auto'}}>
+              <Badge color="green">IBS</Badge><Badge color="green">CBS</Badge><Badge color="amber">IS</Badge><Badge color="blue">2026</Badge>
             </div>
           </div>
+
+          {/* Step bar */}
+          <StepBar step={step} />
 
           {/* Settings */}
-          <div className="no-print">
-            <SettingsPanel endpoint={apiEndpoint} setEndpoint={setApiEndpoint} />
-          </div>
+          <div className="no-print"><SettingsPanel endpoint={apiEndpoint} setEndpoint={setApiEndpoint} /></div>
 
-          {/* Upload Zone */}
-          <div className="no-print" style={{ marginBottom: 20 }}>
-            <DropZone onFilesLoaded={setArquivos} />
-          </div>
-
-          {/* Analyze Button */}
-          <div className="no-print" style={{ marginBottom: 24 }}>
-            <button onClick={analisar} disabled={arquivos.length === 0 || loading}
-              style={{ width: '100%', padding: '14px', borderRadius: 8, border: 'none', cursor: arquivos.length === 0 || loading ? 'not-allowed' : 'pointer',
-                background: arquivos.length === 0 || loading ? S.surface2 : S.green,
-                color: arquivos.length === 0 || loading ? S.text2 : '#0f1117',
-                fontSize: 15, fontWeight: 700, letterSpacing: '0.02em', transition: 'all 0.2s' }}>
-              {loading ? '⟳ Processando notas...' : `Analisar XMLs${arquivos.length > 0 ? ` (${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''})` : ''}`}
-            </button>
-          </div>
-
-          {/* Error */}
-          {erroGlobal && (
-            <div style={{ background: '#ef444420', border: `1px solid ${S.red}`, borderRadius: 8,
-              padding: 14, marginBottom: 16, color: S.red, fontSize: 13 }}>
-              ⚠ {erroGlobal}
+          {/* ── STEP: UPLOAD ── */}
+          {step === 'upload' && (
+            <div className="no-print">
+              <DropZone onFilesLoaded={setArquivos} />
+              <button onClick={handleExtract} disabled={arquivos.length===0||loadingExtract}
+                style={{width:'100%',marginTop:16,padding:'13px',borderRadius:8,border:'none',
+                  cursor:arquivos.length===0||loadingExtract?'not-allowed':'pointer',
+                  background:arquivos.length===0||loadingExtract?C.surface2:C.green,
+                  color:arquivos.length===0||loadingExtract?C.text2:'#0f1117',
+                  fontSize:15,fontWeight:700,transition:'all 0.2s'}}>
+                {loadingExtract ? '⟳ Extraindo campos...' : `Processar Arquivos${arquivos.length>0?` (${arquivos.length})`:''}` }
+              </button>
             </div>
           )}
 
-          {/* Results */}
-          {resultados.length > 0 && (
-            <div className="print-area">
-              {resultados.length >= 2 && (
-                <LoteSummary resultados={resultados} analiseIA={analiseIA} loadingIA={loadingIA} />
+          {/* ── STEP: EXTRACTED FIELDS ── */}
+          {step === 'extracted' && (
+            <div>
+              {extractErrors.length > 0 && (
+                <div style={{background:'#ef444415',border:`1px solid ${C.red}`,borderRadius:8,padding:12,marginBottom:14}}>
+                  {extractErrors.map((e,i) => <div key={i} style={{color:C.red,fontSize:13}}>⚠ {e.arquivo}: {e.erro}</div>)}
+                </div>
               )}
 
-              {resultados.map((r, idx) => (
-                <NoteCard key={idx} resultado={r} analiseIA={analiseIA}
-                  defaultOpen={resultados.length === 1} />
-              ))}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}}>
+                <div>
+                  <h2 style={{color:C.text,fontSize:16,fontWeight:600}}>Campos Extraídos</h2>
+                  <p style={{color:C.text2,fontSize:12,marginTop:2}}>{extractedNotas.length} documento{extractedNotas.length!==1?'s':''} — verifique os campos antes de analisar</p>
+                </div>
+                <div style={{display:'flex',gap:10}}>
+                  <button onClick={resetToUpload} style={{padding:'8px 16px',borderRadius:6,border:`1px solid ${C.surface2}`,background:'transparent',color:C.text2,cursor:'pointer',fontSize:13}}>← Voltar</button>
+                  <button onClick={handleAnalyze} disabled={loadingAnalyze}
+                    style={{padding:'8px 20px',borderRadius:6,border:'none',background:C.green,color:'#0f1117',cursor:loadingAnalyze?'not-allowed':'pointer',fontSize:13,fontWeight:700}}>
+                    {loadingAnalyze ? '⟳ Analisando...' : 'Analisar Tributação →'}
+                  </button>
+                </div>
+              </div>
 
-              {/* Export buttons */}
-              <div className="no-print" style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-                <button onClick={() => exportCSV(resultados)}
-                  style={{ flex: 1, padding: '12px', borderRadius: 8, border: `1px solid ${S.green}`,
-                    background: 'transparent', color: S.green, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
-                  ↓ Exportar CSV
-                </button>
-                <button onClick={() => window.print()}
-                  style={{ flex: 1, padding: '12px', borderRadius: 8, border: `1px solid ${S.text2}`,
-                    background: 'transparent', color: S.text2, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
-                  🖨 Imprimir / PDF
+              {extractedNotas.map((nota, i) => <ExtractedFieldsCard key={i} nota={nota} index={i} />)}
+
+              <div style={{textAlign:'center',marginTop:16}}>
+                <button onClick={handleAnalyze} disabled={loadingAnalyze}
+                  style={{padding:'12px 40px',borderRadius:8,border:'none',background:C.green,color:'#0f1117',cursor:loadingAnalyze?'not-allowed':'pointer',fontSize:15,fontWeight:700}}>
+                  {loadingAnalyze ? '⟳ Calculando tributos...' : 'Analisar Tributação →'}
                 </button>
               </div>
             </div>
           )}
 
-          {/* Footer */}
-          <div style={{ marginTop: 40, textAlign: 'center', color: S.text2, fontSize: 11,
-            fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }}>
-            Base: LC 214/2025 · NT 2025.002 v1.40 · Alíquotas de referência<br />
+          {/* ── STEP: TAX ANALYSIS RESULTS ── */}
+          {step === 'analyzed' && (
+            <div className="print-area">
+              <div className="no-print" style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}}>
+                <div>
+                  <h2 style={{color:C.text,fontSize:16,fontWeight:600}}>Análise Tributária</h2>
+                  <p style={{color:C.text2,fontSize:12,marginTop:2}}>{resultados.length} nota{resultados.length!==1?'s':''} processada{resultados.length!==1?'s':''}</p>
+                </div>
+                <div style={{display:'flex',gap:10}}>
+                  <button onClick={()=>setStep('extracted')} style={{padding:'8px 14px',borderRadius:6,border:`1px solid ${C.surface2}`,background:'transparent',color:C.text2,cursor:'pointer',fontSize:13}}>← Campos extraídos</button>
+                  <button onClick={resetToUpload} style={{padding:'8px 14px',borderRadius:6,border:`1px solid ${C.surface2}`,background:'transparent',color:C.text2,cursor:'pointer',fontSize:13}}>Nova análise</button>
+                </div>
+              </div>
+
+              {resultados.length >= 2 && <LoteSummary resultados={resultados} analiseIA={analiseIA} loadingIA={loadingIA} />}
+              {resultados.map((r,i) => <ResultCard key={i} resultado={r} analiseIA={analiseIA} defaultOpen={resultados.length===1} />)}
+
+              <div className="no-print" style={{display:'flex',gap:10,marginTop:14}}>
+                <button onClick={()=>exportCSV(resultados)} style={{flex:1,padding:'12px',borderRadius:8,border:`1px solid ${C.green}`,background:'transparent',color:C.green,cursor:'pointer',fontSize:14,fontWeight:600}}>↓ Exportar CSV</button>
+                <button onClick={()=>window.print()} style={{flex:1,padding:'12px',borderRadius:8,border:`1px solid ${C.text2}`,background:'transparent',color:C.text2,cursor:'pointer',fontSize:14,fontWeight:600}}>🖨 Imprimir / PDF</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{marginTop:40,textAlign:'center',color:C.text2,fontSize:11,fontFamily:'IBM Plex Mono,monospace',lineHeight:1.6}}>
+            Base: LC 214/2025 · NT 2025.002 v1.40 · Alíquotas de referência<br/>
             Não substitui assessoria tributária especializada
           </div>
         </div>
       );
     }
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
 </html>
