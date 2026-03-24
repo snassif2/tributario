@@ -489,79 +489,101 @@ DADOS: ${JSON.stringify(resumo)}`;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // DROP ZONE — accepts XML and PDF
+    // FILE UPLOAD BOX — one per file type (XML or PDF)
     // ═══════════════════════════════════════════════════════════════════════════
-    function DropZone({ onFilesLoaded }) {
-      const [dragging,  setDragging]  = useState(false);
-      const [entries,   setEntries]   = useState([]);
-      const [rejected,  setRejected]  = useState([]);
+    function FileUploadBox({ tipo, files, onFilesChange }) {
+      const isPDF   = tipo === 'pdf';
+      const ext     = isPDF ? '.pdf' : '.xml';
       const inputRef = useRef();
+      const [error, setError] = useState('');
 
-      const isPDF = f => f.name.toLowerCase().endsWith('.pdf');
-      const isXML = f => f.name.toLowerCase().endsWith('.xml');
-      const MAX_MB = 20;
+      const handleSelect = () => {
+        setError('');
+        inputRef.current.value = '';   // reset so same file can be re-selected
+        inputRef.current.click();
+      };
 
-      const addFiles = useCallback((newFiles) => {
-        const all   = Array.from(newFiles);
+      const addFiles = (fileList) => {
+        setError('');
+        const incoming = Array.from(fileList);
         const valid = [];
         const bad   = [];
-        for (const f of all) {
-          if (!isXML(f) && !isPDF(f)) { bad.push(`${f.name}: formato não suportado (use .xml ou .pdf)`); continue; }
-          if (f.size > MAX_MB * 1024 * 1024) { bad.push(`${f.name}: arquivo muito grande (máx. ${MAX_MB} MB)`); continue; }
+        for (const f of incoming) {
+          const name = f.name.toLowerCase();
+          if (isPDF ? !name.endsWith('.pdf') : !name.endsWith('.xml')) {
+            bad.push(`"${f.name}" não é um arquivo ${ext.toUpperCase()}`);
+            continue;
+          }
+          if (f.size > 20 * 1024 * 1024) {
+            bad.push(`"${f.name}" excede 20 MB`);
+            continue;
+          }
           valid.push(f);
         }
-        setRejected(bad);
-        if (valid.length === 0) return;
-        setEntries(prev => {
-          const updated = [...prev, ...valid.map(f => ({ file:f, type: isPDF(f) ? 'pdf' : 'xml' }))];
-          onFilesLoaded(updated.map(e => e.file));
-          return updated;
-        });
-        // Reset input so the same file can be re-selected if needed
-        if (inputRef.current) inputRef.current.value = '';
-      }, [onFilesLoaded]);
+        if (bad.length > 0) setError(bad.join(' · '));
+        if (valid.length > 0) onFilesChange([...files, ...valid]);
+      };
 
-      const removeFile = i => setEntries(prev => {
-        const updated = prev.filter((_,idx) => idx!==i);
-        onFilesLoaded(updated.map(e => e.file));
-        return updated;
-      });
+      const removeFile = (idx) => onFilesChange(files.filter((_, i) => i !== idx));
+
+      const color   = isPDF ? C.amber : C.blue;
+      const icon    = isPDF ? '📕' : '📎';
+      const label   = isPDF ? 'PDF — DANFE / NFS-e' : 'XML — NF-e / NFS-e';
+      const subtext = isPDF ? 'Campos extraídos por IA (Claude)' : 'Processamento local, sem envio de dados';
 
       return (
-        <div>
-          <div onClick={()=>inputRef.current.click()}
-            onDragEnter={e=>{e.preventDefault();e.stopPropagation();setDragging(true)}}
-            onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragging(true)}}
-            onDragLeave={e=>{e.preventDefault();setDragging(false)}}
-            onDrop={e=>{e.preventDefault();e.stopPropagation();setDragging(false);addFiles(e.dataTransfer.files)}}
-            style={{border:`2px dashed ${dragging?C.green:C.surface2}`,borderRadius:12,padding:'36px 20px',
-              textAlign:'center',cursor:'pointer',background:dragging?'#00c89608':C.surface,transition:'all 0.2s'}}>
-            <div style={{fontSize:32,marginBottom:10}}>📄</div>
-            <div style={{color:C.text,fontSize:15,fontWeight:600,marginBottom:6}}>Arraste XMLs de NF-e / NFS-e ou PDFs (DANFE) aqui</div>
-            <div style={{color:C.text2,fontSize:13}}>ou clique para selecionar · múltiplos arquivos · máx. 20 MB</div>
-            <div style={{display:'flex',gap:8,justifyContent:'center',marginTop:12}}>
-              <Badge color="blue">XML</Badge>
-              <Badge color="amber">PDF</Badge>
+        <div style={{flex:1,minWidth:260}}>
+          {/* Header label */}
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+            <span style={{fontSize:18}}>{icon}</span>
+            <div>
+              <div style={{color:C.text,fontWeight:600,fontSize:14}}>{label}</div>
+              <div style={{color:C.text2,fontSize:11}}>{subtext}</div>
             </div>
-            <input ref={inputRef} type="file" accept=".xml,.pdf" multiple style={{display:'none'}} onChange={e=>addFiles(e.target.files)} />
+            <Badge color={isPDF?'amber':'blue'}>{ext.toUpperCase()}</Badge>
           </div>
 
-          {rejected.length > 0 && (
-            <div style={{marginTop:10,background:'#ef444415',border:`1px solid ${C.red}40`,borderRadius:8,padding:'10px 14px'}}>
-              {rejected.map((msg,i) => <div key={i} style={{color:C.red,fontSize:12,marginBottom:i<rejected.length-1?4:0}}>⚠ {msg}</div>)}
+          {/* Button */}
+          <button
+            onClick={handleSelect}
+            style={{width:'100%',padding:'12px',borderRadius:8,border:`2px dashed ${color}40`,
+              background:C.surface,cursor:'pointer',color,fontSize:13,fontWeight:600,
+              fontFamily:'IBM Plex Mono,monospace',transition:'all 0.2s'}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=color}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=`${color}40`}
+          >
+            + Selecionar {isPDF?'PDFs':'XMLs'}
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ext}
+            multiple
+            style={{display:'none'}}
+            onChange={e => { addFiles(e.target.files); e.target.value=''; }}
+          />
+
+          {/* Error */}
+          {error && (
+            <div style={{marginTop:6,background:'#ef444415',borderRadius:6,padding:'6px 10px',color:C.red,fontSize:11}}>
+              ⚠ {error}
             </div>
           )}
 
-          {entries.length > 0 && (
-            <div style={{marginTop:14}}>
-              <div style={{color:C.text2,fontSize:12,marginBottom:8}}>{entries.length} arquivo{entries.length>1?'s':''} carregado{entries.length>1?'s':''}</div>
-              {entries.map((e, i) => (
-                <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',background:C.surface2,borderRadius:8,marginBottom:6}}>
-                  <span style={{fontSize:14}}>{e.type==='pdf'?'📕':'📎'}</span>
-                  <span style={{flex:1,color:C.text,fontSize:13,fontFamily:'IBM Plex Mono,monospace'}}>{e.file.name}</span>
-                  <Badge color={e.type==='pdf'?'amber':'blue'}>{e.type.toUpperCase()}</Badge>
-                  <span style={{color:C.text2,fontSize:11}}>{(e.file.size/1024).toFixed(1)} KB</span>
-                  <button onClick={()=>removeFile(i)} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
+          {/* File list */}
+          {files.length > 0 && (
+            <div style={{marginTop:10}}>
+              {files.map((f, i) => (
+                <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',
+                  background:C.surface2,borderRadius:7,marginBottom:5}}>
+                  <span style={{fontSize:12}}>{icon}</span>
+                  <span style={{flex:1,color:C.text,fontSize:12,fontFamily:'IBM Plex Mono,monospace',
+                    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name}</span>
+                  <span style={{color:C.text2,fontSize:11,flexShrink:0}}>
+                    {f.size > 1024*1024 ? `${(f.size/1024/1024).toFixed(1)} MB` : `${(f.size/1024).toFixed(0)} KB`}
+                  </span>
+                  <button onClick={()=>removeFile(i)}
+                    style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:16,padding:'0 2px',flexShrink:0}}>×</button>
                 </div>
               ))}
             </div>
@@ -829,7 +851,8 @@ DADOS: ${JSON.stringify(resumo)}`;
     // MAIN APP
     // ═══════════════════════════════════════════════════════════════════════════
     function App() {
-      const [arquivos,      setArquivos]      = useState([]);
+      const [xmlFiles,      setXmlFiles]      = useState([]);
+      const [pdfFiles,      setPdfFiles]      = useState([]);
       const [step,          setStep]          = useState('upload');
       const [extractedNotas,setExtractedNotas]= useState([]);
       const [resultados,    setResultados]    = useState([]);
@@ -859,6 +882,7 @@ DADOS: ${JSON.stringify(resumo)}`;
         setResultados([]);
         setAnaliseIA(null);
 
+        const arquivos = [...xmlFiles, ...pdfFiles];
         const results = await Promise.all(arquivos.map(async file => {
           try {
             if (file.name.toLowerCase().endsWith('.pdf')) {
@@ -905,7 +929,8 @@ DADOS: ${JSON.stringify(resumo)}`;
         }
       };
 
-      const resetToUpload = () => { setStep('upload'); setExtractedNotas([]); setResultados([]); setAnaliseIA(null); setExtractErrors([]); };
+      const resetToUpload = () => { setStep('upload'); setXmlFiles([]); setPdfFiles([]); setExtractedNotas([]); setResultados([]); setAnaliseIA(null); setExtractErrors([]); };
+      const totalFiles = xmlFiles.length + pdfFiles.length;
 
       return (
         <div style={{maxWidth:980,margin:'0 auto',padding:'24px 16px'}}>
@@ -929,14 +954,29 @@ DADOS: ${JSON.stringify(resumo)}`;
           {/* ── STEP: UPLOAD ── */}
           {step === 'upload' && (
             <div className="no-print">
-              <DropZone onFilesLoaded={setArquivos} />
-              <button onClick={handleExtract} disabled={arquivos.length===0||loadingExtract}
-                style={{width:'100%',marginTop:16,padding:'13px',borderRadius:8,border:'none',
-                  cursor:arquivos.length===0||loadingExtract?'not-allowed':'pointer',
-                  background:arquivos.length===0||loadingExtract?C.surface2:C.green,
-                  color:arquivos.length===0||loadingExtract?C.text2:'#0f1117',
+              {/* Two upload boxes side by side */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+                <div style={{background:C.surface,borderRadius:12,padding:16,border:`1px solid ${C.surface2}`}}>
+                  <FileUploadBox tipo="xml" files={xmlFiles} onFilesChange={setXmlFiles} />
+                </div>
+                <div style={{background:C.surface,borderRadius:12,padding:16,border:`1px solid ${C.surface2}`}}>
+                  <FileUploadBox tipo="pdf" files={pdfFiles} onFilesChange={setPdfFiles} />
+                </div>
+              </div>
+
+              {/* Process button */}
+              <button onClick={handleExtract} disabled={totalFiles===0||loadingExtract}
+                style={{width:'100%',padding:'13px',borderRadius:8,border:'none',
+                  cursor:totalFiles===0||loadingExtract?'not-allowed':'pointer',
+                  background:totalFiles===0||loadingExtract?C.surface2:C.green,
+                  color:totalFiles===0||loadingExtract?C.text2:'#0f1117',
                   fontSize:15,fontWeight:700,transition:'all 0.2s'}}>
-                {loadingExtract ? '⟳ Extraindo campos...' : `Processar Arquivos${arquivos.length>0?` (${arquivos.length})`:''}` }
+                {loadingExtract
+                  ? '⟳ Extraindo campos...'
+                  : totalFiles===0
+                    ? 'Selecione arquivos XML ou PDF acima'
+                    : `Processar Arquivos (${totalFiles}${xmlFiles.length>0&&pdfFiles.length>0?` · ${xmlFiles.length} XML + ${pdfFiles.length} PDF`:''})`
+                }
               </button>
             </div>
           )}
