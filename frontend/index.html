@@ -29,7 +29,7 @@
     const { useState, useCallback, useRef, useEffect } = React;
 
     // ─── CONFIG ───────────────────────────────────────────────────────────────
-    const DEFAULT_API_ENDPOINT = "REPLACE_API_ENDPOINT";
+    const DEFAULT_API_ENDPOINT = "https://0s9jx2p8ae.execute-api.us-east-1.amazonaws.com/prod/analyze";
 
     // ─── COLOURS ──────────────────────────────────────────────────────────────
     const C = {
@@ -861,7 +861,11 @@ DADOS: ${JSON.stringify(resumo)}`;
       const [loadingAnalyze,setLoadingAnalyze]= useState(false);
       const [loadingIA,     setLoadingIA]     = useState(false);
       const [extractErrors, setExtractErrors] = useState([]);
-      const [apiEndpoint,   setApiEndpoint]   = useState(() => localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT);
+      const [apiEndpoint,   setApiEndpoint]   = useState(() => {
+        // Prefer baked-in URL; only fall back to localStorage if baked-in is a placeholder
+        if (DEFAULT_API_ENDPOINT.startsWith('http')) return DEFAULT_API_ENDPOINT;
+        return localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT;
+      });
 
       // Prevent browser from navigating to a dropped PDF anywhere on the page
       useEffect(() => {
