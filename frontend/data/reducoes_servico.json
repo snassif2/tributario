@@ -1,0 +1,103 @@
+{
+  "fonte": "LC 214/2025 — Anexo IV — Serviços com alíquota reduzida (NBS)",
+  "grupos": [
+    {
+      "id": "saude_servicos",
+      "descricao": "Serviços de saúde humana: hospitais, clínicas, consultórios, laboratórios, diagnóstico",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, I — Saúde",
+      "nbs_prefixos": [
+        "1401", "1402", "1403", "1404", "1405", "1406", "1407", "1408", "1409",
+        "1410", "1411", "1412", "1413", "1414", "1415", "1416", "1417", "1418",
+        "1419", "1420", "1421", "1422", "1423", "1424", "1425", "1426", "1427",
+        "1428", "1429", "1430"
+      ]
+    },
+    {
+      "id": "educacao_servicos",
+      "descricao": "Serviços de educação: ensino fundamental, médio, superior, técnico, cursos livres, EAD",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, II — Educação",
+      "nbs_prefixos": [
+        "1101", "1102", "1103", "1104", "1105", "1106", "1107", "1108", "1109",
+        "1110", "1111", "1112", "1113", "1114", "1115", "1116", "1117", "1118",
+        "1119", "1120", "1121"
+      ]
+    },
+    {
+      "id": "transporte_coletivo_servicos",
+      "descricao": "Serviços de transporte coletivo de passageiros: ônibus urbano, metrô, trem, ferry, van",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, VIII — Transporte coletivo",
+      "nbs_prefixos": [
+        "0602", "0605", "0611", "0612", "0613", "0614", "0621", "0622"
+      ]
+    },
+    {
+      "id": "saneamento_servicos",
+      "descricao": "Serviços de saneamento básico: abastecimento de água, coleta e tratamento de esgoto, resíduos sólidos",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, IV — Saneamento básico",
+      "nbs_prefixos": [
+        "0303", "0304", "0305"
+      ]
+    },
+    {
+      "id": "cultura_servicos",
+      "descricao": "Serviços de produção cultural e artística: cinema, teatro, música, museu, biblioteca",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, VI — Cultura",
+      "nbs_prefixos": [
+        "1201", "1202", "1203", "1204", "1205", "1206", "1207", "1208", "1209",
+        "1210", "1211", "1212"
+      ]
+    },
+    {
+      "id": "servicos_liberais",
+      "descricao": "Serviços prestados por profissionais liberais com inscrição em conselho de classe: advogados, engenheiros, arquitetos, contadores, médicos em consultório próprio, psicólogos",
+      "fator": 0.70,
+      "reducao_pct": 30,
+      "base_legal": "LC 214/2025, Art. 130, X — Serviços profissionais",
+      "nbs_prefixos": [
+        "01010", "01020", "01030", "01040", "01050", "01060", "01070", "01080",
+        "01090", "01100", "01110", "01120", "01130", "01140", "01150", "01160",
+        "01170", "01180", "01190", "01200"
+      ]
+    },
+    {
+      "id": "seguridade_social",
+      "descricao": "Serviços de previdência complementar aberta e fechada, planos de saúde coletivos",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, XI — Seguridade",
+      "nbs_prefixos": [
+        "0801", "0802", "0803", "0804", "0805"
+      ]
+    },
+    {
+      "id": "assistencia_social",
+      "descricao": "Serviços de assistência social, cuidados de longa duração, ILPI",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, XII — Assistência social",
+      "nbs_prefixos": [
+        "1501", "1502", "1503", "1504", "1505"
+      ]
+    },
+    {
+      "id": "esporte",
+      "descricao": "Serviços desportivos e de recreação: academias, clubes, competições esportivas",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, XIII — Esporte",
+      "nbs_prefixos": [
+        "1301", "1302", "1303", "1304", "1305"
+      ]
+    }
+  ]
+}

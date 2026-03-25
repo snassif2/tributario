@@ -7,6 +7,19 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Anthropic API Key for Claude access
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: OpenAI API Key (used as fallback when Anthropic credits run out)
+  SenderEmail:
+    Type: String
+    Default: ""
+    Description: Verified SES email address used as sender for PDF reports
+  CognitoDomainPrefix:
+    Type: String
+    Default: "tributario-983119018116"
+    Description: Globally unique prefix for Cognito Hosted UI domain
 
 Globals:
   Function:
@@ -16,6 +29,75 @@ Globals:
       - x86_64
 
 Resources:
+
+  # ── Cognito User Pool ──────────────────────────────────────────────────────
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: tributario-users
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true        # users are created by admin only
+        InviteMessageTemplate:
+          EmailMessage: |
+            Seu acesso ao Validador Tributário NF-e/NFS-e foi criado.
+            Usuário: {username}
+            Senha temporária: {####}
+            Acesse: https://d17dpl2yhq6kg9.cloudfront.net
+          EmailSubject: "Acesso ao Validador Tributário"
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: tributario-web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false                   # public client (SPA — no secret)
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - https://d17dpl2yhq6kg9.cloudfront.net
+        - http://localhost:8080
+      LogoutURLs:
+        - https://d17dpl2yhq6kg9.cloudfront.net
+        - http://localhost:8080
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1                  # hours
+      IdTokenValidity: 1                      # hours
+      RefreshTokenValidity: 30                # days
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "tributario-${AWS::AccountId}"
+      UserPoolId: !Ref UserPool
 
   # ── Lambda: Claude API Proxy ──────────────────────────────────────────────
   ClaudeProxyFunction:
@@ -28,6 +110,15 @@ Resources:
       Environment:
         Variables:
           ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          SENDER_EMAIL: !Ref SenderEmail
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendRawEmail
+                - ses:SendEmail
+              Resource: "*"
       Events:
         PostAnalyze:
           Type: HttpApi
@@ -35,35 +126,69 @@ Resources:
             ApiId: !Ref TributarioApi
             Path: /analyze
             Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
         OptionsAnalyze:
           Type: HttpApi
           Properties:
             ApiId: !Ref TributarioApi
             Path: /analyze
             Method: OPTIONS
+            Auth:
+              Authorizer: NONE
         PostExtract:
           Type: HttpApi
           Properties:
             ApiId: !Ref TributarioApi
             Path: /extract
             Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
         OptionsExtract:
           Type: HttpApi
           Properties:
             ApiId: !Ref TributarioApi
             Path: /extract
             Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        PostReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TributarioApi
+            Path: /report
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+        OptionsReport:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TributarioApi
+            Path: /report
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   # ── HTTP API Gateway ──────────────────────────────────────────────────────
   TributarioApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: prod
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+              audience:
+                - !Ref UserPoolClient
+            IdentitySource: "$request.header.Authorization"
       CorsConfiguration:
         AllowOrigins:
           - "*"
         AllowHeaders:
           - Content-Type
+          - Authorization
         AllowMethods:
           - POST
           - OPTIONS
@@ -132,3 +257,21 @@ Outputs:
     Value: !Sub "https://${FrontendDistribution.DomainName}"
     Export:
       Name: TributarioCloudFrontUrl
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: TributarioCognitoUserPoolId
+
+  CognitoClientId:
+    Description: Cognito App Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: TributarioCognitoClientId
+
+  CognitoDomain:
+    Description: Cognito Hosted UI domain
+    Value: !Sub "tributario-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+    Export:
+      Name: TributarioCognitoDomain

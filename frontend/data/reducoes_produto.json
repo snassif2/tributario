@@ -1,0 +1,131 @@
+{
+  "fonte": "LC 214/2025 — Anexos II e III — Produtos com alíquota reduzida",
+  "grupos": [
+    {
+      "id": "saude_medicamentos",
+      "descricao": "Medicamentos e produtos farmacêuticos",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, I — Saúde",
+      "ncm_prefixos": [
+        "3001", "3002", "3003", "3004", "3005", "3006"
+      ]
+    },
+    {
+      "id": "saude_dispositivos",
+      "descricao": "Dispositivos médicos, ortopédicos, próteses e aparelhos de reabilitação",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, I — Saúde",
+      "ncm_prefixos": [
+        "3822", "9001", "9003", "9004", "9018", "9019", "9020", "9021", "9022"
+      ]
+    },
+    {
+      "id": "saude_veterinaria",
+      "descricao": "Produtos veterinários e biológicos",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, I — Saúde",
+      "ncm_prefixos": [
+        "3001", "3002", "3006"
+      ]
+    },
+    {
+      "id": "educacao_livros",
+      "descricao": "Livros, apostilas e materiais didáticos impressos",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, II — Educação",
+      "ncm_prefixos": [
+        "4901", "4902", "4903", "4904", "4905", "4906", "4907", "4910", "4911"
+      ]
+    },
+    {
+      "id": "insumos_agropecuarios",
+      "descricao": "Insumos agropecuários: adubos, fertilizantes, defensivos, sementes, vacinas animais",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, III — Insumos agropecuários",
+      "ncm_prefixos": [
+        "0511", "0713", "1001", "1005", "1006", "1201", "1202", "1204", "1205",
+        "1206", "1207", "1209",
+        "2301", "2302", "2303", "2304", "2305", "2306", "2308", "2309",
+        "3101", "3102", "3103", "3104", "3105",
+        "3808", "3822",
+        "8432", "8433", "8434", "8435", "8436", "8437"
+      ]
+    },
+    {
+      "id": "saneamento_basico",
+      "descricao": "Equipamentos e insumos para saneamento básico (água e esgoto)",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, IV — Saneamento básico",
+      "ncm_prefixos": [
+        "3917", "3925", "7303", "7304", "7305", "7306", "7307",
+        "8413", "8421", "8428"
+      ]
+    },
+    {
+      "id": "acessibilidade_pcd",
+      "descricao": "Produtos de tecnologia assistiva e acessibilidade para pessoas com deficiência",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, V — PCD",
+      "ncm_prefixos": [
+        "8713", "8714", "9001", "9003", "9021"
+      ]
+    },
+    {
+      "id": "producao_cultural",
+      "descricao": "Bens e serviços destinados à atividade artística e cultural nacional",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, VI — Cultura",
+      "ncm_prefixos": [
+        "3705", "3706", "4901", "4902", "4903", "4911",
+        "8523", "9209"
+      ]
+    },
+    {
+      "id": "seguranca_alimentar",
+      "descricao": "Produtos alimentícios básicos fora da cesta básica — com redução parcial",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, VII — Segurança alimentar",
+      "ncm_prefixos": [
+        "0901", "1703", "1801", "1803", "1804", "1805", "1806",
+        "2101", "2102", "2105", "2106"
+      ]
+    },
+    {
+      "id": "transporte_coletivo_equipamentos",
+      "descricao": "Veículos e equipamentos para transporte coletivo de passageiros",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, VIII — Transporte coletivo",
+      "ncm_prefixos": [
+        "8702", "8703", "8711"
+      ]
+    },
+    {
+      "id": "energia_renovavel",
+      "descricao": "Equipamentos para geração de energia solar, eólica e outras fontes renováveis",
+      "fator": 0.40,
+      "reducao_pct": 60,
+      "base_legal": "LC 214/2025, Art. 130, IX — Energia renovável",
+      "ncm_prefixos": [
+        "8501", "8502", "8504", "8541"
+      ]
+    },
+    {
+      "id": "servicos_liberais_bens",
+      "descricao": "Bens utilizados por profissionais liberais (instrumentais / não passíveis de crédito pleno)",
+      "fator": 0.70,
+      "reducao_pct": 30,
+      "base_legal": "LC 214/2025, Art. 130, X — Serviços profissionais",
+      "ncm_prefixos": []
+    }
+  ]
+}

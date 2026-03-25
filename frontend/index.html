@@ -10,6 +10,8 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0f1117; color: #e8eaf0; font-family: 'Inter', sans-serif; }
@@ -29,7 +31,75 @@
     const { useState, useCallback, useRef, useEffect } = React;
 
     // ─── CONFIG ───────────────────────────────────────────────────────────────
-    const DEFAULT_API_ENDPOINT = "https://0s9jx2p8ae.execute-api.us-east-1.amazonaws.com/prod/analyze";
+    const DEFAULT_API_ENDPOINT  = "https://0s9jx2p8ae.execute-api.us-east-1.amazonaws.com/prod/analyze";
+    const COGNITO_CLIENT_ID     = "1bk4k255hv4kt8rrt895j93fke";
+    const COGNITO_DOMAIN        = "tributario-983119018116.auth.us-east-1.amazoncognito.com";
+    const COGNITO_REDIRECT_URI  = "https://d17dpl2yhq6kg9.cloudfront.net";
+    const AUTH_ENABLED          = COGNITO_CLIENT_ID !== "REPLACE_COGNITO_CLIENT_ID";
+
+    // ─── AUTH HELPERS ─────────────────────────────────────────────────────────
+    function authLoginUrl() {
+      return `https://${COGNITO_DOMAIN}/login?` + new URLSearchParams({
+        response_type: 'code', client_id: COGNITO_CLIENT_ID,
+        redirect_uri: COGNITO_REDIRECT_URI, scope: 'openid email profile',
+      });
+    }
+    function authLogoutUrl() {
+      return `https://${COGNITO_DOMAIN}/logout?` + new URLSearchParams({
+        client_id: COGNITO_CLIENT_ID, logout_uri: COGNITO_REDIRECT_URI,
+      });
+    }
+    function authParseJwt(token) {
+      try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
+      catch { return null; }
+    }
+    function authIsValid(token) {
+      if (!token) return false;
+      const p = authParseJwt(token);
+      return !!(p && p.exp * 1000 > Date.now() + 30000);
+    }
+    function authGetToken()  { return localStorage.getItem('trib_id_token'); }
+    function authGetUser()   {
+      const t = authGetToken();
+      return authIsValid(t) ? authParseJwt(t) : null;
+    }
+    function authStore(tokens) {
+      localStorage.setItem('trib_id_token', tokens.id_token);
+      if (tokens.refresh_token) localStorage.setItem('trib_refresh_token', tokens.refresh_token);
+    }
+    function authClear() {
+      localStorage.removeItem('trib_id_token');
+      localStorage.removeItem('trib_refresh_token');
+    }
+    async function authExchangeCode(code) {
+      const res = await fetch(`https://${COGNITO_DOMAIN}/oauth2/token`, {
+        method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({ grant_type:'authorization_code', client_id:COGNITO_CLIENT_ID,
+          redirect_uri:COGNITO_REDIRECT_URI, code }).toString(),
+      });
+      return res.json();
+    }
+    async function authRefreshTokens() {
+      const rt = localStorage.getItem('trib_refresh_token');
+      if (!rt) return false;
+      try {
+        const res = await fetch(`https://${COGNITO_DOMAIN}/oauth2/token`, {
+          method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({ grant_type:'refresh_token', client_id:COGNITO_CLIENT_ID,
+            refresh_token:rt }).toString(),
+        });
+        const tokens = await res.json();
+        if (tokens.id_token) { authStore(tokens); return true; }
+        return false;
+      } catch { return false; }
+    }
+    // Authenticated fetch — attaches Bearer token to API calls
+    function apiFetch(url, options = {}) {
+      const token = authGetToken();
+      const headers = { ...(options.headers || {}) };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      return fetch(url, { ...options, headers });
+    }
 
     // ─── COLOURS ──────────────────────────────────────────────────────────────
     const C = {
@@ -191,36 +261,74 @@
       2032: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
       2033: { cbs:0.088,  ibs_uf:0.089,  ibs_mun:0.088 },
     };
-    const REDUC = {
-      cesta_basica:   { fator:0.00, ncm: ['1006','0713','0201','0202','0203','0207','0401','1905'] },
-      saude:          { fator:0.40, ncm: ['3001','3002','3003','3004','3005','3006'] },
-      alimentos:      { fator:0.40, ncm: ['1006','0713','0201','0202','0203','0207','0401'] },
-      servicos_lib:   { fator:0.70, nbs: ['01040'] },
+    // Tax data — loaded from S3 JSON files, fallback to minimal defaults while loading
+    let TAX_DATA = {
+      cestaBasica:  { ncms: [{prefixo:'1006'},{prefixo:'0713'},{prefixo:'0201'},{prefixo:'0202'},{prefixo:'0203'},{prefixo:'0207'},{prefixo:'0401'},{prefixo:'1905'}] },
+      reducoesProd: { grupos: [
+        { id:'saude', fator:0.40, ncm_prefixos:['3001','3002','3003','3004','3005','3006'], nbs_prefixos:[] },
+        { id:'servicos_liberais', fator:0.70, ncm_prefixos:[], nbs_prefixos:['01040'] },
+      ]},
+      reducoesServ: { grupos: [] },
+      impostoSel:   { produtos: [
+        { categoria:'tabaco',     ncm_prefixos:['2402','2403'], aliquota_is:0.20 },
+        { categoria:'alcoolicas', ncm_prefixos:['2203'],        aliquota_is:0.10 },
+        { categoria:'refrig',     ncm_prefixos:['2202'],        aliquota_is:0.08 },
+        { categoria:'mineracao',  ncm_prefixos:['2601'],        aliquota_is:0.04 },
+      ]},
+      loaded: false,
     };
-    const IS_MAP = { cigarros:{p:'2402',a:0.20}, alcoolicas:{p:'2203',a:0.10}, refrig:{p:'2202',a:0.08}, miner:{p:'2601',a:0.04} };
+
+    async function loadTaxData() {
+      try {
+        const [cb, rp, rs, is_] = await Promise.all([
+          fetch('./data/cesta_basica.json').then(r => r.json()),
+          fetch('./data/reducoes_produto.json').then(r => r.json()),
+          fetch('./data/reducoes_servico.json').then(r => r.json()),
+          fetch('./data/imposto_seletivo.json').then(r => r.json()),
+        ]);
+        TAX_DATA = { cestaBasica: cb, reducoesProd: rp, reducoesServ: rs, impostoSel: is_, loaded: true };
+      } catch(e) {
+        console.warn('Tax data files not found, using built-in defaults:', e.message);
+      }
+    }
 
     function r2(v) { return Math.round(v * 100) / 100; }
 
     function getFator(ncm, nbs) {
       if (!ncm && !nbs) return 1;
-      for (const p of REDUC.cesta_basica.ncm) if (ncm && ncm.startsWith(p)) return 0;
-      for (const [, s] of Object.entries(REDUC)) {
-        if (s.ncm) for (const p of s.ncm) if (ncm && ncm.startsWith(p)) return s.fator;
-        if (s.nbs && nbs) for (const p of s.nbs) if (nbs.startsWith(p)) return s.fator;
-      }
+      // Cesta básica — zero rate
+      for (const item of (TAX_DATA.cestaBasica?.ncms || []))
+        if (ncm && ncm.startsWith(item.prefixo)) return 0;
+      // Reduced-rate products
+      for (const g of (TAX_DATA.reducoesProd?.grupos || []))
+        for (const p of (g.ncm_prefixos || []))
+          if (ncm && ncm.startsWith(p)) return g.fator;
+      // Reduced-rate services (NBS)
+      for (const g of [...(TAX_DATA.reducoesServ?.grupos || []), ...(TAX_DATA.reducoesProd?.grupos || [])])
+        for (const p of (g.nbs_prefixos || []))
+          if (nbs && nbs.startsWith(p)) return g.fator;
       return 1;
     }
     function getSetor(ncm, nbs) {
       if (!ncm && !nbs) return 'Geral';
-      for (const [nome, s] of Object.entries(REDUC)) {
-        if (s.ncm) for (const p of s.ncm) if (ncm && ncm.startsWith(p)) return nome.replace(/_/g,' ');
-        if (s.nbs && nbs) for (const p of s.nbs) if (nbs.startsWith(p)) return nome.replace(/_/g,' ');
+      for (const item of (TAX_DATA.cestaBasica?.ncms || []))
+        if (ncm && ncm.startsWith(item.prefixo)) return 'Cesta Básica';
+      for (const g of (TAX_DATA.reducoesProd?.grupos || [])) {
+        for (const p of (g.ncm_prefixos || []))
+          if (ncm && ncm.startsWith(p)) return g.descricao?.split(':')[0] || g.id;
+        for (const p of (g.nbs_prefixos || []))
+          if (nbs && nbs.startsWith(p)) return g.descricao?.split(':')[0] || g.id;
       }
+      for (const g of (TAX_DATA.reducoesServ?.grupos || []))
+        for (const p of (g.nbs_prefixos || []))
+          if (nbs && nbs.startsWith(p)) return g.descricao?.split(':')[0] || g.id;
       return 'Geral';
     }
     function getIS(ncm, base) {
       if (!ncm) return 0;
-      for (const [, is] of Object.entries(IS_MAP)) if (ncm.startsWith(is.p)) return r2(base * is.a);
+      for (const prod of (TAX_DATA.impostoSel?.produtos || []))
+        for (const p of (prod.ncm_prefixos || []))
+          if (ncm.startsWith(p)) return r2(base * prod.aliquota_is);
       return 0;
     }
     function calcItem(item, ano) {
@@ -274,20 +382,80 @@
     // ═══════════════════════════════════════════════════════════════════════════
     async function extractPDF(base64, filename, endpoint) {
       const extractUrl = endpoint.replace('/analyze','/extract');
-      const res = await fetch(extractUrl, {
+      const res = await apiFetch(extractUrl, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ pdf_base64: base64, filename }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try { const d = await res.json(); detail += ': ' + (d.error?.message || d.error || JSON.stringify(d)); } catch {}
+        throw new Error(detail);
+      }
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       return data.nota;
     }
 
+    // ── CNPJ Lookup (BrasilAPI — Receita Federal, free, no key) ─────────────────
+    const _cnpjCache = {};
+    async function lookupCNPJ(cnpj) {
+      if (!cnpj) return null;
+      const raw = cnpj.replace(/\D/g, '');
+      if (raw.length !== 14) return null;
+      if (_cnpjCache[raw]) return _cnpjCache[raw];
+      try {
+        const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${raw}`);
+        if (!res.ok) return null;
+        const d = await res.json();
+        const result = {
+          razao_social:       d.razao_social || '',
+          porte:              d.porte || '',                          // ME, EPP, DEMAIS
+          simples:            d.opcao_pelo_simples === true,
+          mei:                d.opcao_pelo_mei === true,
+          cnae_codigo:        String(d.cnae_fiscal || ''),
+          cnae_descricao:     d.cnae_fiscal_descricao || '',
+          situacao:           d.descricao_situacao_cadastral || '',
+          regime_confirmado:  d.opcao_pelo_mei === true ? 'MEI' :
+                              d.opcao_pelo_simples === true ? 'Simples Nacional' :
+                              d.porte === 'DEMAIS' ? 'Lucro Presumido ou Lucro Real' :
+                              'Lucro Presumido',
+          crt_confirmado:     (d.opcao_pelo_simples === true || d.opcao_pelo_mei === true) ? '1' : '3',
+        };
+        _cnpjCache[raw] = result;
+        return result;
+      } catch { return null; }
+    }
+
+    async function enriquecerNota(nota) {
+      const cnpjData = await lookupCNPJ(nota.emitente?.cnpj);
+      if (!cnpjData) return nota;
+      return {
+        ...nota,
+        emitente: {
+          ...nota.emitente,
+          regime:  cnpjData.regime_confirmado,
+          crt:     cnpjData.crt_confirmado,
+          porte:   cnpjData.porte,
+          cnae_codigo:    cnpjData.cnae_codigo,
+          cnae_descricao: cnpjData.cnae_descricao,
+          situacao_rf:    cnpjData.situacao,
+          simples:        cnpjData.simples,
+          mei:            cnpjData.mei,
+        },
+      };
+    }
+
     async function chamarClaudeAPI(resultados, endpoint) {
       const resumo = resultados.map(r => ({
         chave: r.nota.chave_acesso, tipo: r.nota.tipo, emitente: r.nota.emitente.nome,
-        regime: r.nota.emitente.regime, valor_nota: r.nota.valor_total_nota,
+        cnpj: r.nota.emitente.cnpj,
+        regime: r.nota.emitente.regime,
+        porte: r.nota.emitente.porte || '',
+        simples: r.nota.emitente.simples || false,
+        mei: r.nota.emitente.mei || false,
+        cnae: r.nota.emitente.cnae_codigo ? `${r.nota.emitente.cnae_codigo} — ${r.nota.emitente.cnae_descricao}` : '',
+        situacao_rf: r.nota.emitente.situacao_rf || '',
+        valor_nota: r.nota.valor_total_nota,
         carga_atual: r.comparativo.atual, carga_nova: r.comparativo.novo,
         delta_pct: r.comparativo.delta_pct,
         ncms: [...new Set(r.nota.itens.map(i=>i.ncm).filter(Boolean))],
@@ -297,8 +465,11 @@
 Analise o lote de notas fiscais e retorne APENAS JSON com esta estrutura exata:
 {"analise_por_nota":[{"chave_acesso":"string","setor_confirmado":"string","tratamento_especial":"nenhum|cesta_basica|imposto_seletivo|saude|educacao|zmf|outro","alertas":[{"tipo":"erro|atencao|info","mensagem":"string"}],"observacao_ncm":"string ou null"}],"resumo_executivo":"string (máx 150 palavras)","recomendacoes":[{"prioridade":"alta|media|baixa","texto":"string"}]}
 
+Os dados incluem regime tributário confirmado via Receita Federal (campo regime), porte da empresa, CNAE principal e situação cadastral.
+Use essas informações para uma análise mais precisa do impacto da reforma.
+
 DADOS: ${JSON.stringify(resumo)}`;
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:2000, messages:[{role:'user',content:prompt}] }),
       });
@@ -355,12 +526,15 @@ DADOS: ${JSON.stringify(resumo)}`;
       return <div style={{display:'flex',gap:8,padding:'6px 10px',borderRadius:6,background:s.bg,marginBottom:4,alignItems:'flex-start'}}><span style={{color:s.c,fontSize:10,marginTop:2,flexShrink:0}}>{s.icon}</span><span style={{color:C.text2,fontSize:12}}>{msg}</span></div>;
     }
 
-    function FieldRow({ label, value, mono, highlight }) {
+    function FieldRow({ label, value, mono, highlight, badge }) {
       if (!value && value !== 0) return null;
       return (
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'5px 0',borderBottom:`1px solid ${C.surface3}20`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${C.surface3}20`}}>
           <span style={{color:C.text2,fontSize:12,minWidth:160}}>{label}</span>
-          <span style={{color:highlight||C.text,fontSize:12,fontFamily:mono?'IBM Plex Mono,monospace':'inherit',textAlign:'right'}}>{value}</span>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            {badge && <span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:4,background:badge.color+'22',color:badge.color,border:`1px solid ${badge.color}44`}}>{badge.text}</span>}
+            <span style={{color:highlight||C.text,fontSize:12,fontFamily:mono?'IBM Plex Mono,monospace':'inherit',textAlign:'right'}}>{value}</span>
+          </div>
         </div>
       );
     }
@@ -459,7 +633,11 @@ DADOS: ${JSON.stringify(resumo)}`;
                   <div style={{color:C.text2,fontSize:10,fontWeight:600,letterSpacing:'0.1em',marginBottom:10}}>EMITENTE</div>
                   <FieldRow label="Razão Social"  value={nota.emitente.nome}  />
                   <FieldRow label="CNPJ"          value={nota.emitente.cnpj}  mono />
-                  <FieldRow label="Regime"        value={nota.emitente.regime} />
+                  <FieldRow label="Regime"        value={nota.emitente.regime}
+                    badge={nota.emitente.simples ? {text:'Simples Nacional',color:C.green} : nota.emitente.mei ? {text:'MEI',color:C.amber} : null} />
+                  <FieldRow label="Porte"         value={nota.emitente.porte || '—'} />
+                  <FieldRow label="CNAE"          value={nota.emitente.cnae_codigo ? `${nota.emitente.cnae_codigo} — ${nota.emitente.cnae_descricao}` : '—'} />
+                  <FieldRow label="Situação RF"   value={nota.emitente.situacao_rf || '—'} />
                   <FieldRow label="CRT"           value={nota.emitente.crt}   mono />
                   <FieldRow label="UF"            value={nota.emitente.uf}    mono />
                 </div>
@@ -850,7 +1028,431 @@ DADOS: ${JSON.stringify(resumo)}`;
     // ═══════════════════════════════════════════════════════════════════════════
     // MAIN APP
     // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODULE 5 — PDF REPORT GENERATION & EMAIL
+    // ═══════════════════════════════════════════════════════════════════════════
+    function buildReportHTML_UNUSED(resultados, analiseIA, userEmail) {
+      const now = new Date().toLocaleString('pt-BR');
+      const fmtBRL = v => 'R$ ' + (v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const fmtPct = v => v != null ? (v>0?'+':'')+v.toFixed(1)+'%' : '—';
+
+      const rows = resultados.flatMap(r =>
+        r.nota.itens.map(item => {
+          const c = r.calc[r.nota.itens.indexOf(item)] || {};
+          return `<tr>
+            <td>${r.nota.emitente?.nome||'—'}</td>
+            <td>${r.nota.tipo||'—'}</td>
+            <td>${item.descricao||'—'}</td>
+            <td>${item.ncm||item.nbs||'—'}</td>
+            <td style="text-align:right">${fmtBRL(item.valor_total)}</td>
+            <td style="text-align:right">${fmtBRL(c.cbs)}</td>
+            <td style="text-align:right">${fmtBRL(c.ibs_total)}</td>
+            <td style="text-align:right">${fmtBRL(c.is)}</td>
+            <td style="text-align:right;font-weight:600">${fmtBRL(c.total_novo)}</td>
+          </tr>`;
+        })
+      ).join('');
+
+      const totais = resultados.reduce((acc,r)=>{
+        acc.base   += r.nota.valor_total_nota||0;
+        acc.atual  += r.comparativo?.atual||0;
+        acc.novo   += r.comparativo?.novo||0;
+        acc.cbs    += r.calc?.reduce((s,c)=>s+(c.cbs||0),0)||0;
+        acc.ibs    += r.calc?.reduce((s,c)=>s+(c.ibs_total||0),0)||0;
+        acc.is     += r.calc?.reduce((s,c)=>s+(c.is||0),0)||0;
+        return acc;
+      }, {base:0,atual:0,novo:0,cbs:0,ibs:0,is:0});
+
+      const delta = totais.novo - totais.atual;
+      const deltaPct = totais.atual>0 ? (delta/totais.atual*100).toFixed(1) : '—';
+
+      const recomendacoes = analiseIA?.recomendacoes?.map(r =>
+        `<li style="margin-bottom:6px"><span style="background:${r.prioridade==='alta'?'#fee2e2':r.prioridade==='media'?'#fef3c7':'#d1fae5'};
+         color:${r.prioridade==='alta'?'#991b1b':r.prioridade==='media'?'#92400e':'#065f46'};
+         padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:6px">${r.prioridade.toUpperCase()}</span>${r.texto}</li>`
+      ).join('') || '';
+
+      return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+      <style>
+        body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px;font-size:12px}
+        h1{color:#0d6d4e;font-size:20px;margin-bottom:4px}
+        h2{color:#0d6d4e;font-size:14px;border-bottom:2px solid #00c896;padding-bottom:6px;margin:20px 0 10px}
+        .meta{color:#666;font-size:11px;margin-bottom:20px}
+        table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px}
+        th{background:#0d6d4e;color:white;padding:6px 8px;text-align:left}
+        td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
+        tr:nth-child(even) td{background:#f9fafb}
+        .summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+        .summary-box{background:#f3f4f6;border-radius:8px;padding:12px;text-align:center}
+        .summary-box .label{color:#6b7280;font-size:10px;margin-bottom:4px}
+        .summary-box .value{font-size:16px;font-weight:700;color:#1a1a2e}
+        .summary-box .value.red{color:#dc2626}
+        .summary-box .value.green{color:#059669}
+        .resumo{background:#f0fdf4;border-left:4px solid #00c896;padding:12px;border-radius:4px;margin-bottom:16px;font-size:12px;line-height:1.6}
+        .footer{margin-top:30px;padding-top:12px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:10px;text-align:center}
+      </style></head><body>
+      <h1>Relatório de Análise Tributária</h1>
+      <div class="meta">
+        Gerado em: ${now} &nbsp;|&nbsp; Usuário: ${userEmail} &nbsp;|&nbsp;
+        Base legal: LC 214/2025 — Reforma Tributária &nbsp;|&nbsp; ${resultados.length} nota(s) analisada(s)
+      </div>
+
+      <h2>Resumo Consolidado</h2>
+      <div class="summary-grid">
+        <div class="summary-box"><div class="label">Valor Total das Notas</div><div class="value">${fmtBRL(totais.base)}</div></div>
+        <div class="summary-box"><div class="label">Carga Tributária Atual</div><div class="value">${fmtBRL(totais.atual)}</div></div>
+        <div class="summary-box"><div class="label">Carga Tributária Nova</div>
+          <div class="value ${delta>0?'red':'green'}">${fmtBRL(totais.novo)} (${delta>0?'+':''}${deltaPct}%)</div></div>
+        <div class="summary-box"><div class="label">Total CBS</div><div class="value">${fmtBRL(totais.cbs)}</div></div>
+        <div class="summary-box"><div class="label">Total IBS</div><div class="value">${fmtBRL(totais.ibs)}</div></div>
+        <div class="summary-box"><div class="label">Total IS</div><div class="value">${fmtBRL(totais.is)}</div></div>
+      </div>
+
+      ${analiseIA?.resumo_executivo ? `<h2>Análise da IA</h2><div class="resumo">${analiseIA.resumo_executivo}</div>` : ''}
+      ${recomendacoes ? `<h2>Recomendações</h2><ul style="padding-left:16px;line-height:1.8">${recomendacoes}</ul>` : ''}
+
+      <h2>Detalhamento por Item</h2>
+      <table>
+        <thead><tr><th>Emitente</th><th>Tipo</th><th>Descrição</th><th>NCM/NBS</th>
+        <th style="text-align:right">Valor</th><th style="text-align:right">CBS</th>
+        <th style="text-align:right">IBS</th><th style="text-align:right">IS</th>
+        <th style="text-align:right">Total Novo</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+
+      <div class="footer">
+        Validador Tributário NF-e/NFS-e · Base: LC 214/2025 · NT 2025.002 v1.40 · Alíquotas de referência<br/>
+        Este relatório não substitui assessoria tributária especializada.
+      </div>
+      </body></html>`;
+    }
+
+    function gerarPDFBytes(resultados, analiseIA, userEmail) {
+      const { jsPDF } = window.jspdf;
+      const doc  = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+      const W    = doc.internal.pageSize.getWidth();
+      const now  = new Date().toLocaleString('pt-BR');
+      const B    = v => 'R$ ' + (v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+      const P    = v => v != null ? (v>0?'+':'')+Number(v).toFixed(1)+'%' : '—';
+      const GREEN  = [0, 200, 150];
+      const DARK   = [26, 29, 39];
+      const GRAY   = [75, 85, 99];
+      const RED    = [220, 38, 38];
+      const AMBER  = [217, 119, 6];
+      let y = 0;
+
+      const addPage = () => { doc.addPage(); y = 15; };
+      const checkY  = (need=20) => { if (y + need > 278) addPage(); };
+
+      const sectionTitle = (title) => {
+        checkY(12);
+        doc.setFillColor(245,247,250);
+        doc.rect(10, y-4, W-20, 8, 'F');
+        doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+        doc.text(title, 12, y); y += 6;
+      };
+
+      // ══ COVER HEADER ═══════════════════════════════════════════════════════
+      doc.setFillColor(...GREEN);
+      doc.rect(0, 0, W, 24, 'F');
+      doc.setTextColor(255,255,255);
+      doc.setFontSize(15); doc.setFont('helvetica','bold');
+      doc.text('Relatorio de Analise Tributaria', 12, 11);
+      doc.setFontSize(9); doc.setFont('helvetica','normal');
+      doc.text('Reforma Tributaria LC 214/2025  |  NT 2025.002 v1.40', 12, 18);
+      doc.setFontSize(8);
+      doc.text(`Gerado: ${now}   Usuario: ${userEmail}   ${resultados.length} nota(s) analisada(s)`, 12, 22.5);
+      y = 32;
+
+      // ══ CONSOLIDATED SUMMARY ════════════════════════════════════════════════
+      const tot = resultados.reduce((a,r) => ({
+        base:      a.base   + (r.nota.valor_total_nota||0),
+        atual:     a.atual  + (r.comparativo?.atual||0),
+        novo:      a.novo   + (r.comparativo?.novo||0),
+        cbs:       a.cbs    + (r.totais?.cbs||0),
+        ibs:       a.ibs    + (r.totais?.ibs||0),
+        is_:       a.is_    + (r.totais?.is||0),
+        cred_cbs:  a.cred_cbs + (r.totais?.credito_cbs||0),
+        cred_ibs:  a.cred_ibs + (r.totais?.credito_ibs||0),
+        split_ret: a.split_ret + (r.split?.valor_retido||0),
+        split_liq: a.split_liq + (r.split?.valor_liquido||0),
+        icms:      a.icms   + (r.tributos_dec_totais?.icms?.valor||0),
+        pis:       a.pis    + (r.tributos_dec_totais?.pis?.valor||0),
+        cofins:    a.cofins + (r.tributos_dec_totais?.cofins?.valor||0),
+        ipi:       a.ipi    + (r.tributos_dec_totais?.ipi?.valor||0),
+        iss:       a.iss    + (r.tributos_dec_totais?.iss?.valor||0),
+      }), {base:0,atual:0,novo:0,cbs:0,ibs:0,is_:0,cred_cbs:0,cred_ibs:0,split_ret:0,split_liq:0,icms:0,pis:0,cofins:0,ipi:0,iss:0});
+      const totDelta    = tot.novo - tot.atual;
+      const totDeltaPct = tot.atual>0 ? (totDelta/tot.atual*100) : null;
+      const splitPct    = tot.base>0 ? ((tot.split_ret/tot.base)*100).toFixed(1) : '0';
+
+      sectionTitle(`RESUMO CONSOLIDADO — ${resultados.length} NOTA(S)`);
+      doc.autoTable({
+        startY: y,
+        head: [['Valor Total','Carga Atual','Carga Nova (LC 214)','Variacao','ICMS+PIS+COFINS+ISS atual','CBS novo','IBS novo','IS novo']],
+        body: [[
+          B(tot.base), B(tot.atual), B(tot.novo),
+          P(totDeltaPct),
+          `${B(tot.icms+tot.pis+tot.cofins+tot.iss+tot.ipi)}`,
+          B(tot.cbs), B(tot.ibs), B(tot.is_),
+        ]],
+        styles: { fontSize:7.5, cellPadding:3 },
+        headStyles: { fillColor:GREEN, textColor:[255,255,255], fontStyle:'bold', fontSize:7 },
+        bodyStyles: { textColor:DARK },
+        columnStyles: { 3: { textColor: totDelta>0?RED:[5,150,105], fontStyle:'bold' } },
+        margin: { left:12, right:12 },
+      });
+      y = doc.lastAutoTable.finalY + 4;
+
+      // Split payment summary
+      doc.autoTable({
+        startY: y,
+        head: [['Split Payment (a partir de 2027)','Valor retido','Valor liquido recebido','% retido','Credito CBS','Credito IBS','Total creditos']],
+        body: [[
+          'Retencao automatica IBS+CBS no pagamento',
+          B(tot.split_ret), B(tot.split_liq), `${splitPct}%`,
+          B(tot.cred_cbs), B(tot.cred_ibs), B(tot.cred_cbs+tot.cred_ibs),
+        ]],
+        styles: { fontSize:7.5, cellPadding:3 },
+        headStyles: { fillColor:[55,65,81], textColor:[255,255,255], fontSize:7 },
+        bodyStyles: { textColor:DARK },
+        margin: { left:12, right:12 },
+      });
+      y = doc.lastAutoTable.finalY + 8;
+
+      // ══ AI ANALYSIS ════════════════════════════════════════════════════════
+      if (analiseIA?.resumo_executivo) {
+        sectionTitle('ANALISE DA IA — RESUMO EXECUTIVO');
+        doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(...DARK);
+        const lines = doc.splitTextToSize(analiseIA.resumo_executivo, W-24);
+        checkY(lines.length*4+6);
+        doc.setFillColor(240,253,250);
+        doc.roundedRect(10, y-2, W-20, lines.length*4+4, 2, 2, 'F');
+        doc.text(lines, 12, y+1); y += lines.length*4+8;
+      }
+
+      if (analiseIA?.recomendacoes?.length) {
+        sectionTitle('RECOMENDACOES');
+        analiseIA.recomendacoes.forEach(r => {
+          const color = r.prioridade==='alta'?RED:r.prioridade==='media'?AMBER:[5,150,105];
+          checkY(10);
+          doc.setFontSize(7); doc.setFont('helvetica','bold'); doc.setTextColor(...color);
+          doc.text(r.prioridade.toUpperCase(), 12, y);
+          doc.setFont('helvetica','normal'); doc.setTextColor(...DARK);
+          const lines = doc.splitTextToSize(r.texto, W-36);
+          doc.text(lines, 30, y); y += Math.max(lines.length*4, 5)+2;
+        });
+        y += 4;
+      }
+
+      // ══ PER-NOTA DETAIL ════════════════════════════════════════════════════
+      resultados.forEach((r, ri) => {
+        const { nota, itens_calc, comparativo, split, totais, tributos_dec_totais, alertas } = r;
+        const maxV = Math.max(comparativo.atual, comparativo.novo, 1);
+
+        checkY(50);
+        // Nota header bar
+        doc.setFillColor(...GREEN);
+        doc.rect(10, y-4, W-20, 9, 'F');
+        doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(255,255,255);
+        doc.text(`NOTA ${ri+1}: ${nota.emitente.nome||'—'}  |  ${nota.tipo||''}  |  ${nota.data_emissao||''}`, 12, y+1);
+        y += 8;
+
+        // Emitente info row
+        doc.autoTable({
+          startY: y,
+          body: [[
+            nota.emitente.cnpj||'—',
+            nota.emitente.regime||'—',
+            nota.emitente.porte||'—',
+            nota.emitente.cnae_codigo ? `${nota.emitente.cnae_codigo} ${nota.emitente.cnae_descricao||''}`.substring(0,45) : '—',
+            nota.emitente.situacao_rf||'—',
+            nota.arquivo_original||'—',
+          ]],
+          head: [['CNPJ','Regime','Porte','CNAE','Situacao RF','Arquivo']],
+          styles: { fontSize:7, cellPadding:2 },
+          headStyles: { fillColor:[55,65,81], textColor:[255,255,255], fontSize:6.5 },
+          margin: { left:12, right:12 },
+        });
+        y = doc.lastAutoTable.finalY + 5;
+
+        // ── Comparison: Atual vs Novo ─────────────────────────────────────
+        checkY(40);
+        sectionTitle('COMPARATIVO TRIBUTARIO: SISTEMA ATUAL x SISTEMA NOVO');
+        doc.autoTable({
+          startY: y,
+          head: [['Tributo','Sistema Atual','','Tributo','Sistema Novo (LC 214)']],
+          body: [
+            ['ICMS', B(tributos_dec_totais?.icms?.valor||0), '', 'CBS', B(totais?.cbs||0)],
+            ['PIS',  B(tributos_dec_totais?.pis?.valor||0),  '', 'IBS', B(totais?.ibs||0)],
+            ['COFINS',B(tributos_dec_totais?.cofins?.valor||0),'','IS', B(totais?.is||0)],
+            ['ISS',  B(tributos_dec_totais?.iss?.valor||0),  '', '', ''],
+            ['IPI',  B(tributos_dec_totais?.ipi?.valor||0),  '', '', ''],
+            [{content:'TOTAL', styles:{fontStyle:'bold'}}, {content:B(comparativo.atual), styles:{fontStyle:'bold'}}, '',
+             {content:'TOTAL', styles:{fontStyle:'bold'}}, {content:B(comparativo.novo), styles:{fontStyle:'bold'}}],
+            [{content:`${comparativo.atual_pct}% do valor da nota`, colSpan:2, styles:{textColor:GRAY, fontSize:7}}, '',
+             {content:`${comparativo.novo_pct}% do valor da nota`, colSpan:2, styles:{textColor:GRAY, fontSize:7}}, ''],
+          ],
+          styles: { fontSize:8, cellPadding:3 },
+          headStyles: { fillColor:[75,85,99], textColor:[255,255,255], fontSize:7 },
+          columnStyles: {
+            1: { halign:'right', fontFamily:'courier' },
+            4: { halign:'right', fontFamily:'courier', textColor:[5,150,105] },
+          },
+          margin: { left:12, right:12 },
+        });
+        y = doc.lastAutoTable.finalY + 3;
+
+        // Variation box
+        checkY(14);
+        const varColor = comparativo.tendencia==='reducao'?GREEN:comparativo.tendencia==='aumento'?RED:GRAY;
+        const varLabel = comparativo.tendencia==='reducao'?'REDUCAO DE CARGA':comparativo.tendencia==='aumento'?'AUMENTO DE CARGA':'SEM VARIACAO';
+        doc.setFillColor(varColor[0], varColor[1], varColor[2], 0.1);
+        doc.setDrawColor(...varColor);
+        doc.roundedRect(12, y, W-24, 10, 2, 2, 'FD');
+        doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(...varColor);
+        const varArrow = comparativo.tendencia==='reducao'?'↓':comparativo.tendencia==='aumento'?'↑':'→';
+        doc.text(`${varArrow}  ${B(Math.abs(comparativo.delta))}  (${P(comparativo.delta_pct)})  —  ${varLabel}`, W/2, y+6.5, {align:'center'});
+        y += 14;
+
+        // ── Split Payment ─────────────────────────────────────────────────
+        checkY(30);
+        sectionTitle('SPLIT PAYMENT — RETENCAO AUTOMATICA (a partir de 2027)');
+        doc.autoTable({
+          startY: y,
+          head: [['Valor Total da Nota','Valor Retido (IBS+CBS)','Valor Liquido Recebido','Percentual Retido']],
+          body: [[
+            {content:B(nota.valor_total_nota), styles:{textColor:DARK}},
+            {content:B(split.valor_retido),    styles:{textColor:RED,   fontStyle:'bold'}},
+            {content:B(split.valor_liquido),   styles:{textColor:[5,150,105], fontStyle:'bold'}},
+            {content:`${split.percentual}%`,   styles:{textColor:AMBER, fontStyle:'bold'}},
+          ]],
+          styles: { fontSize:9, cellPadding:4, halign:'center' },
+          headStyles: { fillColor:[55,65,81], textColor:[255,255,255], fontSize:7, halign:'center' },
+          margin: { left:12, right:12 },
+        });
+        y = doc.lastAutoTable.finalY + 4;
+
+        // Split bar
+        const retW = Math.max(((split.percentual||0)/100)*(W-24), 0);
+        doc.setFillColor(...RED);   doc.rect(12, y, retW, 5, 'F');
+        doc.setFillColor(5,150,105); doc.rect(12+retW, y, (W-24)-retW, 5, 'F');
+        doc.setFontSize(6.5); doc.setFont('helvetica','normal');
+        doc.setTextColor(255,255,255);
+        if (retW > 10) doc.text(`${split.percentual}% retido`, 14, y+3.5);
+        if ((W-24)-retW > 15) doc.text(`${(100-split.percentual).toFixed(1)}% recebido`, 12+retW+2, y+3.5);
+        y += 9;
+
+        // ── Credits ───────────────────────────────────────────────────────
+        checkY(20);
+        sectionTitle('CREDITOS IBS/CBS GERADOS');
+        doc.autoTable({
+          startY: y,
+          head: [['Credito CBS','Credito IBS','Total de Creditos','Observacao']],
+          body: [[
+            {content:B(totais?.credito_cbs||0), styles:{textColor:[5,150,105],fontStyle:'bold'}},
+            {content:B(totais?.credito_ibs||0), styles:{textColor:[5,150,105],fontStyle:'bold'}},
+            {content:B((totais?.credito_cbs||0)+(totais?.credito_ibs||0)), styles:{textColor:[5,150,105],fontStyle:'bold'}},
+            'Valido para destinatarios contribuintes PJ fora do Simples',
+          ]],
+          styles: { fontSize:8, cellPadding:3 },
+          headStyles: { fillColor:[55,65,81], textColor:[255,255,255], fontSize:7 },
+          margin: { left:12, right:12 },
+        });
+        y = doc.lastAutoTable.finalY + 4;
+
+        // ── Items detail ──────────────────────────────────────────────────
+        checkY(20);
+        sectionTitle('DETALHAMENTO POR ITEM');
+        const itemRows = nota.itens.map((item,i) => {
+          const c = itens_calc?.[i] || {};
+          const fatorLabel = c.fator===0?'Cesta Basica (0%)':c.fator<1?`Reducao ${Math.round((1-c.fator)*100)}%`:'Aliquota Plena';
+          return [
+            item.numero, (item.descricao||'—').substring(0,35),
+            item.ncm||item.nbs||'—', c.setor||'Geral',
+            fatorLabel, B(item.valor_total),
+            B(c.cbs||0), B(c.ibs_total||0), B(c.is||0),
+            {content:B(c.total_novo||0), styles:{fontStyle:'bold', textColor:[5,150,105]}},
+          ];
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['#','Descricao','NCM/NBS','Setor','Tratamento','Valor Base','CBS','IBS','IS','Total Novo']],
+          body: itemRows,
+          styles: { fontSize:6.5, cellPadding:2 },
+          headStyles: { fillColor:GREEN, textColor:[255,255,255], fontSize:6 },
+          alternateRowStyles: { fillColor:[249,250,251] },
+          columnStyles: { 5:{halign:'right'}, 6:{halign:'right'}, 7:{halign:'right'}, 8:{halign:'right'}, 9:{halign:'right'} },
+          margin: { left:12, right:12 },
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      });
+
+      // ══ FOOTER ON ALL PAGES ════════════════════════════════════════════════
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i=1; i<=totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(6.5); doc.setFont('helvetica','normal'); doc.setTextColor(150,150,150);
+        doc.text('Validador Tributario NF-e/NFS-e  ·  LC 214/2025  ·  NT 2025.002 v1.40  ·  Nao substitui assessoria tributaria especializada',
+          W/2, 291, { align:'center' });
+        doc.text(`Pagina ${i} de ${totalPages}`, W-12, 291, { align:'right' });
+      }
+
+      return doc.output('arraybuffer');
+    }
+
+    async function gerarEEnviarPDF(resultados, analiseIA, userEmail, apiEndpoint, setStatus) {
+      try {
+        setStatus('gerando');
+        const pdfBuffer = gerarPDFBytes(resultados, analiseIA, userEmail);
+
+        // Convert ArrayBuffer to base64
+        const bytes = new Uint8Array(pdfBuffer);
+        let binary = '';
+        for (let i=0; i<bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        const base64 = btoa(binary);
+
+        setStatus('enviando');
+        const reportUrl = apiEndpoint.replace('/analyze', '/report');
+        const res = await apiFetch(reportUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userEmail, pdf_base64: base64, filename: 'relatorio-tributario.pdf' }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(()=>({}));
+          throw new Error(d.error || `HTTP ${res.status}`);
+        }
+        setStatus('enviado');
+      } catch(e) {
+        setStatus('erro:' + e.message);
+      }
+    }
+
+    function LoginScreen() {
+      return (
+        <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:C.surface,border:`1px solid ${C.surface2}`,borderRadius:16,padding:48,maxWidth:400,width:'100%',textAlign:'center'}}>
+            <div style={{fontSize:28,fontWeight:700,color:C.green,marginBottom:8}}>Validador Tributário</div>
+            <div style={{color:'#8b92a5',fontSize:14,marginBottom:8}}>NF-e / NFS-e</div>
+            <div style={{color:'#6b7280',fontSize:12,marginBottom:32}}>Reforma Tributária — LC 214/2025</div>
+            <button
+              onClick={() => window.location.href = authLoginUrl()}
+              style={{width:'100%',padding:'12px 24px',background:C.green,color:'#0f1117',border:'none',
+                      borderRadius:8,fontSize:15,fontWeight:700,cursor:'pointer'}}>
+              Entrar
+            </button>
+            <div style={{color:'#4b5563',fontSize:11,marginTop:24}}>
+              Acesso restrito — solicite credenciais ao administrador
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function App() {
+      const [authUser,      setAuthUser]      = useState(null);
+      const [authLoading,   setAuthLoading]   = useState(AUTH_ENABLED);
       const [xmlFiles,      setXmlFiles]      = useState([]);
       const [pdfFiles,      setPdfFiles]      = useState([]);
       const [step,          setStep]          = useState('upload');
@@ -861,11 +1463,39 @@ DADOS: ${JSON.stringify(resumo)}`;
       const [loadingAnalyze,setLoadingAnalyze]= useState(false);
       const [loadingIA,     setLoadingIA]     = useState(false);
       const [extractErrors, setExtractErrors] = useState([]);
+      const [reportStatus,  setReportStatus]  = useState('idle'); // idle|gerando|enviando|enviado|erro:msg
       const [apiEndpoint,   setApiEndpoint]   = useState(() => {
-        // Prefer baked-in URL; only fall back to localStorage if baked-in is a placeholder
         if (DEFAULT_API_ENDPOINT.startsWith('http')) return DEFAULT_API_ENDPOINT;
         return localStorage.getItem('tributario_api_endpoint') || DEFAULT_API_ENDPOINT;
       });
+
+      const [taxDataReady, setTaxDataReady] = useState(false);
+
+      // ── Auth init ────────────────────────────────────────────────────────
+      useEffect(() => {
+        if (!AUTH_ENABLED) return;
+        (async () => {
+          // Check for authorization code returned by Cognito Hosted UI
+          const params = new URLSearchParams(window.location.search);
+          const code = params.get('code');
+          if (code) {
+            window.history.replaceState({}, '', window.location.pathname);
+            const tokens = await authExchangeCode(code);
+            if (tokens.id_token) { authStore(tokens); setAuthUser(authParseJwt(tokens.id_token)); setAuthLoading(false); return; }
+          }
+          // Existing valid token
+          if (authIsValid(authGetToken())) { setAuthUser(authGetUser()); setAuthLoading(false); return; }
+          // Try refresh
+          if (await authRefreshTokens()) { setAuthUser(authGetUser()); setAuthLoading(false); return; }
+          // Not authenticated
+          setAuthLoading(false);
+        })();
+      }, []);
+
+      // Load external tax data tables from S3
+      useEffect(() => {
+        loadTaxData().then(() => setTaxDataReady(TAX_DATA.loaded));
+      }, []);
 
       // Prevent browser from navigating to a dropped PDF anywhere on the page
       useEffect(() => {
@@ -897,13 +1527,15 @@ DADOS: ${JSON.stringify(resumo)}`;
                 reader.onerror = () => reject(new Error('Falha ao ler o arquivo PDF'));
                 reader.readAsDataURL(file);
               });
-              const nota = await extractPDF(b64, file.name, apiEndpoint);
+              let nota = await extractPDF(b64, file.name, apiEndpoint);
               if (!nota) throw new Error('A IA não retornou dados do documento');
               nota._source = 'pdf';
+              nota = await enriquecerNota(nota);
               return { ok:true, nota };
             } else {
               const text = await file.text();
-              const nota = parseXML(text, file.name);
+              let nota = parseXML(text, file.name);
+              nota = await enriquecerNota(nota);
               return { ok:true, nota };
             }
           } catch(e) {
@@ -938,6 +1570,14 @@ DADOS: ${JSON.stringify(resumo)}`;
       const resetToUpload = () => { setStep('upload'); setXmlFiles([]); setPdfFiles([]); setExtractedNotas([]); setResultados([]); setAnaliseIA(null); setExtractErrors([]); };
       const totalFiles = xmlFiles.length + pdfFiles.length;
 
+      // Auth gating
+      if (authLoading) return (
+        <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',color:C.text2,fontSize:14}}>
+          Autenticando…
+        </div>
+      );
+      if (AUTH_ENABLED && !authUser) return <LoginScreen />;
+
       return (
         <div style={{maxWidth:980,margin:'0 auto',padding:'24px 16px'}}>
           {/* Header */}
@@ -946,8 +1586,18 @@ DADOS: ${JSON.stringify(resumo)}`;
               <h1 style={{fontSize:22,fontWeight:700,color:C.text,letterSpacing:'-0.02em'}}>Validador Tributário NF-e / NFS-e</h1>
               <p style={{color:C.text2,fontSize:13,marginTop:4}}>Reforma Tributária 2026 — LC 214/2025</p>
             </div>
-            <div style={{display:'flex',gap:8,marginLeft:'auto'}}>
+            <div style={{display:'flex',gap:8,marginLeft:'auto',alignItems:'center'}}>
               <Badge color="green">IBS</Badge><Badge color="green">CBS</Badge><Badge color="amber">IS</Badge><Badge color="blue">2026</Badge>
+              {AUTH_ENABLED && authUser && (
+                <div style={{display:'flex',alignItems:'center',gap:8,marginLeft:8,borderLeft:`1px solid ${C.surface2}`,paddingLeft:12}}>
+                  <span style={{fontSize:12,color:C.text2}}>{authUser.email}</span>
+                  <button onClick={() => { authClear(); window.location.href = authLogoutUrl(); }}
+                    style={{fontSize:11,padding:'3px 8px',background:'transparent',border:`1px solid ${C.surface3}`,
+                            color:C.text2,borderRadius:4,cursor:'pointer'}}>
+                    Sair
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -955,7 +1605,12 @@ DADOS: ${JSON.stringify(resumo)}`;
           <StepBar step={step} />
 
           {/* Settings */}
-          <div className="no-print"><SettingsPanel endpoint={apiEndpoint} setEndpoint={setApiEndpoint} /></div>
+          <div className="no-print" style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <SettingsPanel endpoint={apiEndpoint} setEndpoint={setApiEndpoint} />
+            <div style={{fontSize:12,padding:'4px 10px',borderRadius:6,border:`1px solid ${taxDataReady ? C.green : C.amber}`,color: taxDataReady ? C.green : C.amber}}>
+              {taxDataReady ? '✓ Tabelas LC 214/2025 carregadas' : '⟳ Carregando tabelas tributárias…'}
+            </div>
+          </div>
 
           {/* ── STEP: UPLOAD ── */}
           {step === 'upload' && (
@@ -1059,10 +1714,30 @@ DADOS: ${JSON.stringify(resumo)}`;
               {resultados.length >= 2 && <LoteSummary resultados={resultados} analiseIA={analiseIA} loadingIA={loadingIA} />}
               {resultados.map((r,i) => <ResultCard key={i} resultado={r} analiseIA={analiseIA} defaultOpen={resultados.length===1} />)}
 
-              <div className="no-print" style={{display:'flex',gap:10,marginTop:14}}>
+              <div className="no-print" style={{display:'flex',gap:10,marginTop:14,flexWrap:'wrap'}}>
                 <button onClick={()=>exportCSV(resultados)} style={{flex:1,padding:'12px',borderRadius:8,border:`1px solid ${C.green}`,background:'transparent',color:C.green,cursor:'pointer',fontSize:14,fontWeight:600}}>↓ Exportar CSV</button>
                 <button onClick={()=>window.print()} style={{flex:1,padding:'12px',borderRadius:8,border:`1px solid ${C.text2}`,background:'transparent',color:C.text2,cursor:'pointer',fontSize:14,fontWeight:600}}>🖨 Imprimir / PDF</button>
+                <button
+                  disabled={reportStatus==='gerando'||reportStatus==='enviando'}
+                  onClick={()=>{ setReportStatus('idle'); gerarEEnviarPDF(resultados, analiseIA, authUser?.email || '', apiEndpoint, setReportStatus); }}
+                  style={{flex:1,padding:'12px',borderRadius:8,
+                    border:`1px solid ${reportStatus==='enviado'?C.green:reportStatus.startsWith('erro')?C.red:C.blue}`,
+                    background:'transparent',
+                    color: reportStatus==='enviado'?C.green:reportStatus.startsWith('erro')?C.red:C.blue,
+                    cursor: reportStatus==='gerando'||reportStatus==='enviando'?'wait':'pointer',
+                    fontSize:14,fontWeight:600}}>
+                  {reportStatus==='gerando'  ? '⟳ Gerando PDF…'  :
+                   reportStatus==='enviando' ? '⟳ Enviando…'     :
+                   reportStatus==='enviado'  ? '✓ Relatório enviado!' :
+                   reportStatus.startsWith('erro') ? '✗ Erro — tentar novamente' :
+                   '✉ Enviar Relatório por Email'}
+                </button>
               </div>
+              {reportStatus.startsWith('erro') && (
+                <div style={{marginTop:8,fontSize:12,color:C.red,padding:'8px 12px',background:'#1a0a0a',borderRadius:6}}>
+                  {reportStatus.replace('erro:','')}
+                </div>
+              )}
             </div>
           )}
 

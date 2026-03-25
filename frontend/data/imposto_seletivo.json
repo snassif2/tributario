@@ -1,0 +1,119 @@
+{
+  "fonte": "LC 214/2025 — Arts. 409–413 — Imposto Seletivo (IS)",
+  "descricao": "IS incide sobre produção, extração, comercialização ou importação de bens e serviços prejudiciais à saúde ou ao meio ambiente",
+  "observacao": "IS é calculado sobre o valor da operação (exceto mineração — por tonelada)",
+  "produtos": [
+    {
+      "categoria": "tabaco",
+      "descricao": "Cigarros, cigarrilhas, charutos, cachimbo e outros produtos do tabaco",
+      "ncm_prefixos": ["2401", "2402", "2403"],
+      "aliquota_is": 1.00,
+      "observacao": "Alíquota de 100% sobre valor de saída da fábrica (excise)"
+    },
+    {
+      "categoria": "bebidas_alcoolicas",
+      "descricao": "Cervejas, vinhos, aguardentes, espirituosas e outras bebidas alcoólicas",
+      "ncm_prefixos": ["2203", "2204", "2205", "2206", "2207", "2208"],
+      "aliquota_is": 0.12,
+      "observacao": "Varia por teor alcoólico; cerveja 12%, destilados até 30%"
+    },
+    {
+      "categoria": "bebidas_acucaradas",
+      "descricao": "Refrigerantes, sucos adicionados de açúcar e outras bebidas não alcoólicas com açúcar",
+      "ncm_prefixos": ["2202"],
+      "aliquota_is": 0.20,
+      "observacao": "Inclui refrigerantes, bebidas energéticas, néctares com açúcar adicionado"
+    },
+    {
+      "categoria": "veiculos_combustao",
+      "descricao": "Automóveis de passageiros com motor a combustão interna",
+      "ncm_prefixos": ["870321", "870322", "870323", "870324", "870331", "870332", "870333"],
+      "aliquota_is": 0.07,
+      "observacao": "Varia por cilindrada: até 1.0L = 7%; 1.0–2.0L = 11%; acima 2.0L = 16%"
+    },
+    {
+      "categoria": "veiculos_hibridos",
+      "descricao": "Veículos híbridos (motor a combustão + motor elétrico)",
+      "ncm_prefixos": ["870340", "870350", "870360"],
+      "aliquota_is": 0.03,
+      "observacao": "Alíquota reduzida para incentivar adoção de veículos menos poluentes"
+    },
+    {
+      "categoria": "veiculos_eletricos",
+      "descricao": "Veículos elétricos puros",
+      "ncm_prefixos": ["870380", "870390"],
+      "aliquota_is": 0.01,
+      "observacao": "Alíquota muito reduzida — incentivo à mobilidade elétrica"
+    },
+    {
+      "categoria": "motocicletas",
+      "descricao": "Motocicletas e ciclomotores acima de 170cm³",
+      "ncm_prefixos": ["871120", "871130", "871140", "871150", "871160", "871190"],
+      "aliquota_is": 0.05,
+      "observacao": "Motocicletas até 170cm³ isentas"
+    },
+    {
+      "categoria": "aviacao_privada",
+      "descricao": "Aeronaves de uso privado (jatos executivos, aviões de turismo)",
+      "ncm_prefixos": ["880211", "880212", "880219", "880220"],
+      "aliquota_is": 0.10,
+      "observacao": "Não inclui aeronaves comerciais de passageiros ou de carga"
+    },
+    {
+      "categoria": "embarcacoes_lazer",
+      "descricao": "Iates, veleiros, barcos a motor de uso recreativo e esportivo",
+      "ncm_prefixos": ["890310", "890391", "890392", "890399"],
+      "aliquota_is": 0.10,
+      "observacao": "Não inclui embarcações comerciais, pesqueiros ou de trabalho"
+    },
+    {
+      "categoria": "armas_municoes",
+      "descricao": "Armas de fogo, munições e artefatos explosivos de uso civil",
+      "ncm_prefixos": ["9301", "9302", "9303", "9304", "9305", "9306", "9307"],
+      "aliquota_is": 0.25,
+      "observacao": "Armas e munições de uso das Forças Armadas e Segurança Pública isentas"
+    },
+    {
+      "categoria": "mineracao_ferro",
+      "descricao": "Extração de minério de ferro",
+      "ncm_prefixos": ["2601"],
+      "aliquota_is": 0.01,
+      "observacao": "Alíquota sobre receita bruta de extração; não sobre valor comercial"
+    },
+    {
+      "categoria": "mineracao_ouro",
+      "descricao": "Extração de ouro",
+      "ncm_prefixos": ["2616"],
+      "aliquota_is": 0.01,
+      "observacao": ""
+    },
+    {
+      "categoria": "mineracao_cobre",
+      "descricao": "Extração de cobre",
+      "ncm_prefixos": ["2603"],
+      "aliquota_is": 0.01,
+      "observacao": ""
+    },
+    {
+      "categoria": "mineracao_bauxita",
+      "descricao": "Extração de bauxita (alumínio)",
+      "ncm_prefixos": ["2606"],
+      "aliquota_is": 0.01,
+      "observacao": ""
+    },
+    {
+      "categoria": "mineracao_outros",
+      "descricao": "Outros minerais metálicos e não metálicos",
+      "ncm_prefixos": ["2602", "2604", "2605", "2607", "2608", "2609", "2610", "2611", "2612", "2613", "2614", "2615"],
+      "aliquota_is": 0.01,
+      "observacao": ""
+    },
+    {
+      "categoria": "petroleo_gas",
+      "descricao": "Extração de petróleo bruto e gás natural",
+      "ncm_prefixos": ["2709", "2711"],
+      "aliquota_is": 0.01,
+      "observacao": "IS sobre extração; combustíveis finais seguem regime específico de CBS/IBS monofásico"
+    }
+  ]
+}
