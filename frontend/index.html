@@ -121,6 +121,8 @@
       const root = xmlDoc.documentElement;
       const tag = root.tagName || '';
       const ns  = root.namespaceURI || '';
+      // DPS = NFS-e Padrão Nacional (SPED/Fazenda)
+      if (tag === 'DPS' || tag === 'compNfse' || xmlDoc.getElementsByTagName('infDPS').length > 0) return 'DPS';
       if (tag.includes('nfeProc') || tag.includes('NFe') || ns.includes('nfe.fazenda') || ns.includes('portalfiscal.inf.br/nfe')) return 'NFe';
       if (tag.includes('CompNfse') || tag.includes('NfseProc') || ns.includes('nfse') || ns.includes('abrasf')) return 'NFSe';
       if (xmlDoc.getElementsByTagName('infNFe').length > 0) return 'NFe';
@@ -238,12 +240,97 @@
       };
     }
 
+    // NFS-e Padrão Nacional — DPS (Documento de Prestação de Serviço)
+    // xmlns: http://www.sped.fazenda.gov.br/nfse
+    function parseDPS(xmlDoc, fileName) {
+      const infDPS = xmlDoc.getElementsByTagName('infDPS')[0] || xmlDoc;
+      const prest  = xmlDoc.getElementsByTagName('prest')[0] || xmlDoc;
+      const toma   = xmlDoc.getElementsByTagName('toma')[0]  || xmlDoc;
+      const serv   = xmlDoc.getElementsByTagName('serv')[0]  || xmlDoc;
+      const cServ  = serv.getElementsByTagName('cServ')[0]   || serv;
+      const vals   = xmlDoc.getElementsByTagName('valores')[0] || xmlDoc;
+      const vServPrest = vals.getElementsByTagName('vServPrest')[0] || vals;
+      const trib   = vals.getElementsByTagName('trib')[0]    || xmlDoc;
+      const tribMun = trib.getElementsByTagName('tribMun')[0] || xmlDoc;
+      const totTrib = trib.getElementsByTagName('totTrib')[0] || xmlDoc;
+      const regTrib = prest.getElementsByTagName('regTrib')[0] || xmlDoc;
+
+      const dhEmi  = getTextByTag(infDPS,'dhEmi') || getTextByTag(infDPS,'dCompet') || '';
+      const ano    = dhEmi ? parseInt(dhEmi.substring(0,4)) : new Date().getFullYear();
+      const valServ= pf(getTextByTag(vServPrest,'vServ'));
+      const vDesc  = pf(getTextByTag(vals.getElementsByTagName('vDescCondIncond')[0] || vals,'vDescIncond'))
+                   + pf(getTextByTag(vals.getElementsByTagName('vDescCondIncond')[0] || vals,'vDescCond'));
+      const valLiq = valServ - vDesc;
+
+      // opSimpNac: 1=Não SN, 2=SN sem crédito, 3=SN com crédito, 4=MEI
+      const opSimpNac = parseInt(getTextByTag(regTrib,'opSimpNac') || '1');
+      const isMEI     = opSimpNac === 4;
+      const isSN      = opSimpNac === 2 || opSimpNac === 3;
+      const crt       = (isMEI || isSN) ? '1' : '3';
+      const regime    = isMEI ? 'MEI' : isSN ? 'Simples Nacional' : 'Lucro Presumido / Real';
+
+      // ISS: tribISSQN=1 → tributado; pTotTribSN = alíquota total SN (inclui ISS)
+      const tribISSQN = getTextByTag(tribMun,'tribISSQN');
+      const pTotSN    = pf(getTextByTag(totTrib,'pTotTribSN'));   // % total SN
+      // ISS estimado: para SN usamos pTotSN; para regime normal não temos alíq explícita no DPS
+      const issAliq   = pTotSN > 0 ? pTotSN / 100 : 0;
+      const issValor  = r2(valLiq * issAliq);
+
+      const chave = (infDPS.getAttribute ? infDPS.getAttribute('Id') : null) || getTextByTag(infDPS,'nDPS') || null;
+
+      return {
+        tipo: 'NFSe', cenario: 'B',
+        chave_acesso: chave,
+        emitente: {
+          cnpj: getTextByTag(prest,'CNPJ') || '',
+          nome: getTextByTag(prest,'xNome') || '',
+          crt, regime, uf: '',
+          simples: isSN, mei: isMEI,
+        },
+        destinatario: {
+          cnpj_cpf: getTextByTag(toma,'CNPJ') || getTextByTag(toma,'CPF') || '',
+          tipo: getTextByTag(toma,'CNPJ') ? 'PJ' : 'PF',
+          contribuinte: true,
+        },
+        data_emissao: dhEmi.substring(0,10),
+        ano_emissao: ano,
+        natureza_operacao: 'Prestação de Serviço',
+        valor_total_nota: valLiq || valServ,
+        itens: [{
+          numero: 1,
+          codigo: getTextByTag(cServ,'cTribNac') || '',
+          descricao: getTextByTag(cServ,'xDescServ') || 'Serviço',
+          ncm: null,
+          nbs: getTextByTag(cServ,'cNBS') || null,
+          cfop: null,
+          quantidade: 1,
+          valor_unitario: valLiq || valServ,
+          valor_total: valLiq || valServ,
+          desconto: vDesc,
+          tributos_declarados: {
+            icms:   { valor:0, aliquota:0, cst:'' },
+            pis:    { valor:0, aliquota:0 },
+            cofins: { valor:0, aliquota:0 },
+            ipi:    { valor:0, aliquota:0 },
+            iss:    { valor: issValor, aliquota: issAliq },
+            ibs:    { valor: null, aliquota: null },
+            cbs:    { valor: null, aliquota: null },
+          },
+          cst_ibs_cbs: null, cclasstrib: null,
+        }],
+        erros_parse: [],
+        arquivo_original: fileName,
+        _source: 'xml',
+      };
+    }
+
     function parseXML(text, fileName) {
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(text, 'text/xml');
       if (xmlDoc.querySelector('parsererror')) throw new Error('XML malformado');
       const tipo = detectTipo(xmlDoc);
       if (tipo === 'NFe')  return parseNFe(xmlDoc, fileName);
+      if (tipo === 'DPS')  return parseDPS(xmlDoc, fileName);
       if (tipo === 'NFSe') return parseNFSe(xmlDoc, fileName);
       throw new Error('Documento não reconhecido como NF-e ou NFS-e');
     }

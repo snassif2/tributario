@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
+    <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
+        <infNFe versao="4.00" Id="NFe32191107670813000825550010059062251133037938">
+            <ide>
+                <cUF>32</cUF>
+                <cNF>13303793</cNF>
+                <natOp>VENDA PARA CONSUMIDOR FINAL</natOp>
+                <mod>55</mod>
+                <serie>1</serie>
+                <nNF>5906225</nNF>
+                <dhEmi>2019-11-20T00:00:00-02:00</dhEmi>
+                <dhSaiEnt>2019-11-20T18:19:28-02:00</dhSaiEnt>
+                <tpNF>1</tpNF>
+                <idDest>2</idDest>
+                <cMunFG>3205101</cMunFG>
+                <tpImp>1</tpImp>
+                <tpEmis>1</tpEmis>
+                <cDV>8</cDV>
+                <tpAmb>1</tpAmb>
+                <finNFe>1</finNFe>
+                <indFinal>1</indFinal>
+                <indPres>2</indPres>
+                <procEmi>0</procEmi>
+                <verProc>MIGRATEGNFe</verProc>
+            </ide>
+            <emit>
+                <CNPJ>07670813000823</CNPJ>
+                <xNome>SEILA COMERCIO ELETRONICO S.A</xNome>
+                <xFant>SEILA</xFant>
+                <enderEmit>
+                    <xLgr>ROD BR-132</xLgr>
+                    <nro>1000</nro>
+                    <xCpl>GALPAO 12 ARMZ 1</xCpl>
+                    <xBairro>VILA AMARO</xBairro>
+                    <cMun>3205101</cMun>
+                    <xMun>VIANA</xMun>
+                    <UF>ES</UF>
+                    <CEP>29143080</CEP>
+                    <cPais>1058</cPais>
+                    <xPais>BRASIL</xPais>
+                    <fone>195552323</fone>
+                </enderEmit>
+                <IE>013581225</IE>
+                <CRT>3</CRT>
+            </emit>
+            <dest>
+                <CPF>014345733812</CPF>
+                <xNome>CICLANO DA SILVA</xNome>
+                <enderDest>
+                    <xLgr>RUA CLOVIS MAGALHAES</xLgr>
+                    <nro>100</nro>
+                    <xBairro>VILA SANTO ESPEDITO</xBairro>
+                    <cMun>3550308</cMun>
+                    <xMun>SAO PAULO</xMun>
+                    <UF>SP</UF>
+                    <CEP>04234120</CEP>
+                    <cPais>1058</cPais>
+                    <xPais>BRASIL</xPais>
+                    <fone>1150734858</fone>
+                </enderDest>
+                <indIEDest>9</indIEDest>
+            </dest>
+            <det nItem="1">
+                <prod>
+                    <cProd>18169</cProd>
+                    <cEAN/>
+                    <xProd>MULTILASER LEITOR DE CARTAO 46 EM 1 AC076</xProd>
+                    <NCM>84719019</NCM>
+                    <CEST>2103400</CEST>
+                    <CFOP>6108</CFOP>
+                    <uCom>UN</uCom>
+                    <qCom>1.0000</qCom>
+                    <vUnCom>28.9000000000</vUnCom>
+                    <vProd>28.90</vProd>
+                    <cEANTrib/>
+                    <uTrib>UN</uTrib>
+                    <qTrib>1.0000</qTrib>
+                    <vUnTrib>28.9000000000</vUnTrib>
+                    <vFrete>11.89</vFrete>
+                    <indTot>1</indTot>
+                </prod>
+                <imposto>
+                    <ICMS>
+                        <ICMS00>
+                            <orig>0</orig>
+                            <CST>00</CST>
+                            <modBC>3</modBC>
+                            <vBC>40.79</vBC>
+                            <pICMS>12.0000</pICMS>
+                            <vICMS>4.89</vICMS>
+                        </ICMS00>
+                    </ICMS>
+                    <PIS>
+                        <PISAliq>
+                            <CST>01</CST>
+                            <vBC>33.45</vBC>
+                            <pPIS>1.6500</pPIS>
+                            <vPIS>0.55</vPIS>
+                        </PISAliq>
+                    </PIS>
+                    <COFINS>
+                        <COFINSAliq>
+                            <CST>01</CST>
+                            <vBC>33.45</vBC>
+                            <pCOFINS>7.6000</pCOFINS>
+                            <vCOFINS>2.54</vCOFINS>
+                        </COFINSAliq>
+                    </COFINS>
+                </imposto>
+            </det>
+            <total>
+                <ICMSTot>
+                    <vBC>40.79</vBC>
+                    <vICMS>4.89</vICMS>
+                    <vICMSDeson>0.00</vICMSDeson>
+                    <vICMSUFDest>2.45</vICMSUFDest>
+                    <vFCP>0.00</vFCP>
+                    <vBCST>0.00</vBCST>
+                    <vST>0.00</vST>
+                    <vFCPST>0.00</vFCPST>
+                    <vFCPSTRet>0.00</vFCPSTRet>
+                    <vProd>28.90</vProd>
+                    <vFrete>11.89</vFrete>
+                    <vSeg>0.00</vSeg>
+                    <vDesc>0.00</vDesc>
+                    <vII>0.00</vII>
+                    <vIPI>0.00</vIPI>
+                    <vIPIDevol>0.00</vIPIDevol>
+                    <vPIS>0.55</vPIS>
+                    <vCOFINS>2.54</vCOFINS>
+                    <vOutro>0.00</vOutro>
+                    <vNF>40.79</vNF>
+                </ICMSTot>
+            </total>
+            <transp>
+                <modFrete>0</modFrete>
+            </transp>
+            <pag>
+                <detPag>
+                    <tPag>15</tPag>
+                    <vPag>40.79</vPag>
+                </detPag>
+            </pag>
+        </infNFe>
+    </NFe>
+    <protNFe versao="4.00">
+        <infProt>
+            <tpAmb>1</tpAmb>
+            <verAplic>SVRS201908091113</verAplic>
+            <chNFe>32191107670813000825550010059062251133037938</chNFe>
+            <dhRecbto>2019-11-20T18:21:24-03:00</dhRecbto>
+            <nProt>332190059936977</nProt>
+            <digVal>LB8yNbRKD5qSIeNXsurcG6PAERs=</digVal>
+            <cStat>100</cStat>
+            <xMotivo>Autorizado o uso da NF-e</xMotivo>
+        </infProt>
+    </protNFe>
+</nfeProc>
