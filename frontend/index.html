@@ -331,15 +331,37 @@
           if (ncm.startsWith(p)) return r2(base * prod.aliquota_is);
       return 0;
     }
-    function calcItem(item, ano) {
+    // Simples Nacional: IBS+CBS incluídos no DAS — alíquota efetiva estimada ~4,5% combinada
+    // Proporção aproximada: CBS 33,6%, IBS_UF 47,2%, IBS_MUN 19,2% (mantém proporcionalidade)
+    const ALIQ_SIMPLES_COMBINADA = 0.045;
+    function calcItem(item, ano, regime = {}) {
       const aliq  = ALIQ[ano] || ALIQ[2026];
       const base  = item.valor_total - (item.desconto || 0);
       const fator = getFator(item.ncm, item.nbs);
+      const is    = getIS(item.ncm, base);
+
+      if (regime.mei) {
+        // MEI: isento de IBS/CBS (recolhe INSS fixo, sem IBS/CBS)
+        return { base, fator, cbs:0, ibs_uf:0, ibs_mun:0, ibs_total:0,
+                 is:r2(is), total_novo:r2(is), credito_cbs:0, credito_ibs:0,
+                 setor:getSetor(item.ncm,item.nbs), mei_isento:true };
+      }
+      if (regime.simples) {
+        // Simples Nacional: alíquota estimada; crédito não é transferível ao tomador
+        const tot   = base * ALIQ_SIMPLES_COMBINADA * fator;
+        const cbsS  = r2(tot * 0.336);
+        const ibsUFS= r2(tot * 0.472);
+        const ibsMunS=r2(tot * 0.192);
+        const ibsS  = ibsUFS + ibsMunS;
+        return { base, fator, cbs:cbsS, ibs_uf:ibsUFS, ibs_mun:ibsMunS, ibs_total:ibsS,
+                 is:r2(is), total_novo:r2(cbsS+ibsS+is), credito_cbs:cbsS, credito_ibs:ibsS,
+                 setor:getSetor(item.ncm,item.nbs), simples_estimado:true };
+      }
+
       const cbs   = base * aliq.cbs     * fator;
       const ibsUF = base * aliq.ibs_uf  * fator;
       const ibsMun= base * aliq.ibs_mun * fator;
       const ibs   = ibsUF + ibsMun;
-      const is    = getIS(item.ncm, base);
       return { base, fator, cbs:r2(cbs), ibs_uf:r2(ibsUF), ibs_mun:r2(ibsMun), ibs_total:r2(ibs),
                is:r2(is), total_novo:r2(cbs+ibs+is), credito_cbs:r2(cbs), credito_ibs:r2(ibs), setor:getSetor(item.ncm,item.nbs) };
     }
@@ -358,6 +380,10 @@
     function gerarAlertas(nota, calc) {
       const al = [];
       if (nota.cenario==='B') al.push({tipo:'simulacao',msg:'Grupo IBS/CBS ausente — valores projetados'});
+      if (nota.emitente?.mei)
+        al.push({tipo:'info',msg:'MEI — isento de IBS/CBS; recolhe INSS fixo via DAS'});
+      else if (nota.emitente?.simples)
+        al.push({tipo:'atencao',msg:'Simples Nacional — IBS/CBS estimado (~4,5%); alíquota real depende do Anexo e faixa de receita'});
       nota.itens.forEach((item, i) => {
         const c = calc[i];
         if (!item.ncm && nota.tipo==='NFe') al.push({tipo:'atencao',msg:`Item ${item.numero}: NCM não informado`});
@@ -365,10 +391,11 @@
         if (c?.fator===0) al.push({tipo:'info',msg:`Item ${item.numero}: Cesta básica — alíquota zero`});
         else if (c?.fator < 1) al.push({tipo:'info',msg:`Item ${item.numero}: Redução ${Math.round((1-c.fator)*100)}% (${c.setor})`});
       });
-      return al.slice(0,6);
+      return al.slice(0,8);
     }
     function processarNota(nota) {
-      const calc = nota.itens.map(it => calcItem(it, nota.ano_emissao));
+      const regime = { simples: !!nota.emitente?.simples, mei: !!nota.emitente?.mei };
+      const calc = nota.itens.map(it => calcItem(it, nota.ano_emissao, regime));
       const totCBS = r2(calc.reduce((s,c)=>s+c.cbs,0));
       const totIBS = r2(calc.reduce((s,c)=>s+c.ibs_total,0));
       const totIS  = r2(calc.reduce((s,c)=>s+c.is,0));
@@ -426,22 +453,63 @@
       } catch { return null; }
     }
 
+    function validarContraRF(nota, cnpjData) {
+      // Compares AI-extracted PDF data against confirmed Receita Federal data
+      const ok = [], warn = [];
+
+      // Company name — normalize and check overlap
+      const nomeIA = (nota.emitente.nome||'').toUpperCase().replace(/[.\-\/]/g,'').trim();
+      const nomeRF = (cnpjData.razao_social||'').toUpperCase().replace(/[.\-\/]/g,'').trim();
+      if (nomeRF && nomeIA) {
+        const wordsIA = nomeIA.split(/\s+/).filter(w=>w.length>3);
+        const match = wordsIA.some(w => nomeRF.includes(w));
+        if (match) ok.push('Razão Social compatível com RF');
+        else       warn.push(`Nome divergente — IA extraiu "${nota.emitente.nome}" / RF: "${cnpjData.razao_social}"`);
+      }
+
+      // Regime — CRT match
+      const crtIA = nota.emitente.crt;
+      const crtRF = cnpjData.crt_confirmado;
+      if (crtIA && crtIA !== crtRF)
+        warn.push(`Regime divergente — documento indica CRT ${crtIA} / RF confirma CRT ${crtRF} (${cnpjData.regime_confirmado})`);
+      else if (crtRF)
+        ok.push(`Regime confirmado: ${cnpjData.regime_confirmado}`);
+
+      // Company status
+      if (cnpjData.situacao && cnpjData.situacao !== 'Ativa')
+        warn.push(`Situação cadastral RF: ${cnpjData.situacao}`);
+      else if (cnpjData.situacao === 'Ativa')
+        ok.push('Empresa ativa na Receita Federal');
+
+      return {
+        status:   warn.length > 0 ? 'divergencia' : 'validado',
+        fonte:    'Receita Federal via BrasilAPI',
+        ok, warn,
+      };
+    }
+
     async function enriquecerNota(nota) {
       const cnpjData = await lookupCNPJ(nota.emitente?.cnpj);
       if (!cnpjData) return nota;
+
+      const validacao = nota._source === 'pdf' ? validarContraRF(nota, cnpjData) : null;
+
       return {
         ...nota,
         emitente: {
           ...nota.emitente,
-          regime:  cnpjData.regime_confirmado,
-          crt:     cnpjData.crt_confirmado,
-          porte:   cnpjData.porte,
+          // Always override with confirmed RF data (authoritative)
+          nome:           cnpjData.razao_social || nota.emitente.nome,
+          regime:         cnpjData.regime_confirmado,
+          crt:            cnpjData.crt_confirmado,
+          porte:          cnpjData.porte,
           cnae_codigo:    cnpjData.cnae_codigo,
           cnae_descricao: cnpjData.cnae_descricao,
           situacao_rf:    cnpjData.situacao,
           simples:        cnpjData.simples,
           mei:            cnpjData.mei,
         },
+        _validacao_rf: validacao,
       };
     }
 
@@ -623,6 +691,27 @@ DADOS: ${JSON.stringify(resumo)}`;
                   <span style={{color:C.text2,fontSize:12}}>Campos extraídos automaticamente do PDF pela IA — verifique os valores antes de prosseguir com a análise tributária.</span>
                 </div>
               )}
+
+              {nota._validacao_rf && (() => {
+                const v = nota._validacao_rf;
+                const isOk = v.status === 'validado';
+                return (
+                  <div style={{background: isOk ? '#10b98115' : '#f59e0b15', border:`1px solid ${isOk ? C.green : C.amber}40`, borderRadius:8, padding:'10px 14px', marginBottom:16}}>
+                    <div style={{display:'flex',gap:8,alignItems:'center',marginBottom: (v.ok?.length || v.warn?.length) ? 8 : 0}}>
+                      <span style={{fontSize:14}}>{isOk ? '✅' : '⚠️'}</span>
+                      <span style={{color: isOk ? C.green : C.amber, fontSize:12, fontWeight:600}}>
+                        {isOk ? 'Dados validados contra Receita Federal' : 'Divergências detectadas vs Receita Federal'}
+                      </span>
+                    </div>
+                    {v.ok?.map((msg,i) => (
+                      <div key={i} style={{color:C.green,fontSize:11,marginLeft:22,marginBottom:2}}>✓ {msg}</div>
+                    ))}
+                    {v.warn?.map((msg,i) => (
+                      <div key={i} style={{color:C.amber,fontSize:11,marginLeft:22,marginBottom:2}}>⚠ {msg}</div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {nota.erros_parse?.length > 0 && nota.erros_parse.map((e,i) => <AlertRow key={i} tipo="erro" msg={e} />)}
 
